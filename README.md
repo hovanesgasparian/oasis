@@ -83,6 +83,36 @@ npm run dev
 
 The app will be available at the URL shown in the console output.
 
+### Geoapify Routing MCP Server
+
+This repo exposes an HTTP MCP endpoint at `/mcp` with a `route_between_destinations` tool backed by the Geoapify Geocoding and Routing APIs.
+
+Set your API key in `.env`:
+
+```env
+GEOAPIFY_API_KEY=your_geoapify_api_key
+```
+
+Run the app locally:
+
+```bash
+npm run dev
+```
+
+The MCP endpoint is available at:
+
+```text
+http://localhost:8000/mcp
+```
+
+After deployment as a Databricks App, use the app URL:
+
+```text
+https://<app-url>/mcp
+```
+
+For Databricks AI Gateway MCP discovery, deploy this route from an app whose name starts with `mcp-`, for example `mcp-geoapify-routing`. Keep `GEOAPIFY_API_KEY` in the app environment or a Databricks secret, not in tracked source files.
+
 ### Build
 
 Build both client and server for production:
