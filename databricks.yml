@@ -1,0 +1,18 @@
+bundle:
+  name: oasis
+
+resources:
+  apps:
+    app:
+      name: "oasis"
+      description: "A Databricks App for Medical Desert Planning"
+      source_code_path: ./
+      # Uncomment to enable on behalf of user API scopes. Available scopes: sql, dashboards.genie, files.files, serving.serving-endpoints
+      # user_api_scopes:
+      #   - sql
+
+targets:
+  default:
+    default: true
+    workspace:
+      host: https://dbc-ee0ead6d-c943.cloud.databricks.com
