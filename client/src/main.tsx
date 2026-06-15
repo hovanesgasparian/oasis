@@ -1,5 +1,6 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
+import { ThemeProvider } from 'next-themes';
 import './index.css';
 import App from './App.tsx';
 import { ErrorBoundary } from './ErrorBoundary.tsx';
@@ -7,7 +8,9 @@ import { ErrorBoundary } from './ErrorBoundary.tsx';
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <ErrorBoundary>
-      <App />
+      <ThemeProvider attribute="class" defaultTheme="system" enableSystem>
+        <App />
+      </ThemeProvider>
     </ErrorBoundary>
   </StrictMode>
 );
