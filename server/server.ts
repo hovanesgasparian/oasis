@@ -1,4 +1,5 @@
 import { createApp, server, genie } from '@databricks/appkit';
+import { registerGeoapifyMcpRoutes } from './geoapify-mcp.js';
 
 createApp({
   plugins: [
@@ -9,4 +10,9 @@ createApp({
       },
     }),
   ],
+  onPluginsReady(appkit) {
+    appkit.server.extend((app) => {
+      registerGeoapifyMcpRoutes(app);
+    });
+  },
 }).catch(console.error);
