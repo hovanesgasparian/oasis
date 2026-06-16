@@ -338,6 +338,16 @@ export function registerCareFinderRoutes(app: Application): void {
     }
   });
 
+  app.post('/api/care-finder/translate', async (req: Request, res: Response) => {
+    try {
+      const text = getString(req.body, 'text');
+      const sourceLanguage = getString(req.body, 'sourceLanguage');
+      res.json(await translateVoiceTranscript(text, sourceLanguage));
+    } catch (error) {
+      sendRouteError(res, error);
+    }
+  });
+
   app.get('/api/care-finder/recent', async (_req: Request, res: Response) => {
     try {
       res.json({ rows: await loadRecentAnalyses() });
@@ -1526,6 +1536,46 @@ function parseAnalyzeRequest(input: unknown): AnalyzeRequest {
     throw new Error('Upload an image or enter symptoms/case context before searching.');
   }
   return request;
+}
+
+async function translateVoiceTranscript(text: string, sourceLanguage: string): Promise<JsonRecord> {
+  const transcript = text.trim();
+  if (!transcript) {
+    throw new Error('Enter or record a voice transcript before translating.');
+  }
+  const languageLabel = sourceLanguage.trim() || 'browser default or unknown';
+  const prompt = `
+Translate this voice transcript to clear English for care-finder case search.
+
+Rules:
+- Preserve all symptoms, timing, locations, patient context, and medical terms.
+- Do not diagnose, summarize away details, or add advice.
+- If the transcript is already English, return it as the English translation.
+- Return JSON only.
+
+Source language: ${languageLabel}
+Transcript:
+${transcript}
+
+Schema:
+{
+  "source_language": "detected or provided language",
+  "english_translation": "faithful English translation"
+}`;
+
+  const response = await callAiGateway({
+    model: getMatchModelName(),
+    messages: [{ role: 'user', content: prompt }],
+    max_tokens: 800,
+    temperature: 0,
+  });
+  const content = extractMessageContent(response);
+  const parsed = safeJsonLoads(content);
+  const englishTranslation = getString(parsed, 'english_translation') || stringFromUnknown(parsed.raw_text ?? content);
+  return {
+    sourceLanguage: getString(parsed, 'source_language') || languageLabel,
+    englishTranslation,
+  };
 }
 
 function getAnalysisInputMode(request: AnalyzeRequest): AnalysisInputMode {
