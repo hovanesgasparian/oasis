@@ -7,7 +7,7 @@ import { CareFinderPage } from './CareFinderPage';
 type AppTab = 'genie' | 'care-finder';
 
 const tabs: Array<{ id: AppTab; label: string }> = [
-  { id: 'genie', label: 'Genie Space' },
+  { id: 'genie', label: 'Survey Says' },
   { id: 'care-finder', label: 'Care Finder Vision' },
 ];
 

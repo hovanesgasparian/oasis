@@ -26,6 +26,8 @@ type CareFinderSettings = {
   insuranceFilter: string;
 };
 
+type AnalysisInputMode = 'image' | 'case-context' | 'image-and-context';
+
 type AnalyzeRequest = {
   imageName: string;
   imageDataUrl: string;
@@ -362,8 +364,9 @@ async function analyzeAndRecommend(request: AnalyzeRequest): Promise<JsonRecord>
     `User symptoms or context: ${request.userSymptoms}`,
   ].join('\n');
 
-  const visionResult = await runVisionModel(request.imageDataUrl, userContext);
-  const parsed = isRecord(visionResult.parsed) ? visionResult.parsed : {};
+  const inputMode = getAnalysisInputMode(request);
+  const routingResult = await runCareRoutingModel(request.imageDataUrl, userContext);
+  const parsed = isRecord(routingResult.parsed) ? routingResult.parsed : {};
 
   if (!Array.isArray(parsed.care_domains) || parsed.care_domains.length === 0) {
     parsed.care_domains = inferCareDomains(parsed);
@@ -399,10 +402,10 @@ async function analyzeAndRecommend(request: AnalyzeRequest): Promise<JsonRecord>
       imageId,
       imageName: request.imageName,
       facilityId: primaryFacilityId,
-      modelName: `${getVisionModelName()} + ${getMatchModelName()}`,
+      modelName: `${getVisionModelName()} (${inputMode}) + ${getMatchModelName()}`,
       prompt: userContext,
-      caption: visionResult.caption,
-      rawResponse: visionResult.rawResponse,
+      caption: routingResult.caption,
+      rawResponse: routingResult.rawResponse,
     });
   } catch (error) {
     writeWarning = `Analysis completed, but writing the result to ${getResultsTable()} failed: ${errorMessage(error)}`;
@@ -411,8 +414,9 @@ async function analyzeAndRecommend(request: AnalyzeRequest): Promise<JsonRecord>
 
   return {
     imageId,
+    inputMode,
     parsed,
-    caption: visionResult.caption,
+    caption: routingResult.caption,
     urgency: parsed.urgency_level ?? 'unclear',
     taxonomyCandidates: taxonomyCandidates.slice(0, request.settings.topN),
     recommended,
@@ -422,17 +426,23 @@ async function analyzeAndRecommend(request: AnalyzeRequest): Promise<JsonRecord>
   };
 }
 
-async function runVisionModel(
+async function runCareRoutingModel(
   imageDataUrl: string,
   userContext: string
 ): Promise<{ caption: string; parsed: JsonRecord; rawResponse: string }> {
+  const hasImage = imageDataUrl.trim().length > 0;
+  const inputDescription = hasImage ? 'an uploaded image and user-provided case context' : 'user-provided case context';
+  const sourceRules = hasImage
+    ? 'Use non-diagnostic visual observations from the image plus any user-described symptoms or context.'
+    : 'No image was provided. Use only the user-provided text and do not claim visual observations or image findings.';
   const prompt = `
-You are helping route a user to appropriate care based on an uploaded image.
+You are helping route a user to appropriate care based on ${inputDescription}.
 
 Important safety rules:
 - Do not provide a definitive medical diagnosis.
-- Do not claim certainty from an image.
-- Provide non-diagnostic visual observations only.
+- Do not claim certainty from limited user-provided information.
+- Provide non-diagnostic routing observations only.
+- ${sourceRules}
 - Mention that a licensed clinician should evaluate concerning symptoms.
 - If red flags are visible or described, recommend urgent or emergency care.
 
@@ -442,11 +452,11 @@ ${userContext}
 Use these generalized care-domain taxonomy ids when relevant:
 ${JSON.stringify(Object.keys(CARE_TAXONOMY))}
 
-Analyze the image and return JSON only with this schema:
+Analyze the ${hasImage ? 'image and case context' : 'case context'} and return JSON only with this schema:
 {
   "brief_summary": "one short non-diagnostic summary",
-  "possible_conditions_or_findings": ["possible visible issues, not diagnoses"],
-  "observed_injury_or_ailment_features": ["visible cues such as swelling, cut, rash, bruising, burn, deformity, eye redness, etc."],
+  "possible_conditions_or_findings": ["possible reported or visible issues, not diagnoses"],
+  "observed_injury_or_ailment_features": ["reported or visible cues such as swelling, cut, rash, bruising, burn, deformity, eye redness, pain, fever, etc."],
   "urgency_level": "emergency | urgent | routine | unclear",
   "red_flags": ["visible or user-described red flags"],
   "care_domains": ["taxonomy ids from the list above"],
@@ -455,21 +465,26 @@ Analyze the image and return JSON only with this schema:
   "specialties_to_consider": ["clinical specialties that may be relevant"],
   "equipment_or_services_needed": ["x-ray", "blood laboratory", "ICU", "operation theater", "wound care", "imaging", "pediatric care", etc."],
   "self_care_cautions": ["brief safety cautions only"],
-  "confidence_notes": "limitations of image-only assessment"
+  "confidence_notes": "limitations of image/context-only assessment"
 }`;
+
+  const content: string | JsonRecord[] = hasImage
+    ? [
+        { type: 'text', text: prompt },
+        { type: 'image_url', image_url: { url: imageDataUrl } },
+      ]
+    : prompt;
 
   const response = await callAiGateway({
     model: getVisionModelName(),
     messages: [
       {
         role: 'user',
-        content: [
-          { type: 'text', text: prompt },
-          { type: 'image_url', image_url: { url: imageDataUrl } },
-        ],
+        content,
       },
     ],
     max_tokens: 1200,
+    temperature: 0,
   });
   const caption = extractMessageContent(response);
   return {
@@ -491,7 +506,7 @@ async function runFacilityMatchModel(
   const candidatePayloads = candidates.map((row, index) => facilityCandidatePayload(row, `c${index + 1}`));
   const prompt = `
 You are a healthcare facility routing assistant. You are not diagnosing.
-Your job is to match the reported illness and non-diagnostic image findings to the most appropriate facility.
+Your job is to match the reported illness and non-diagnostic routing findings to the most appropriate facility.
 
 Use BOTH sources of evidence:
 1. Generated recommender taxonomy context.
@@ -504,7 +519,7 @@ Do not recommend a facility only because it is nearby if the capability match is
 Generated taxonomy context:
 ${taxonomyContextForPrompt()}
 
-Reported illness and image-routing context:
+Reported illness and care-routing context:
 ${JSON.stringify(buildReportedIllnessContext(parsed, userContext))}
 
 Candidate facilities:
@@ -1128,7 +1143,7 @@ function buildWhatsappMessage(
     row.distance_km !== undefined ? `Approximate distance from user: ${row.distance_km} km` : '',
     userAddressOrNotes ? `User location/context: ${userAddressOrNotes}` : '',
     userSymptoms ? `Symptoms/context provided by user: ${userSymptoms}` : '',
-    parsed.brief_summary ? `Non-diagnostic image summary: ${stringFromUnknown(parsed.brief_summary)}` : '',
+    parsed.brief_summary ? `Non-diagnostic care-routing summary: ${stringFromUnknown(parsed.brief_summary)}` : '',
     `Urgency flagged by app: ${stringFromUnknown(parsed.urgency_level, 'unclear')}`,
     row.matched_care_domains ? `Relevant care domains: ${row.matched_care_domains}` : '',
     row.matched_care_terms ? `Relevant care needs: ${row.matched_care_terms}` : '',
@@ -1297,7 +1312,7 @@ function buildReportedIllnessContext(parsed: JsonRecord, userContext: string): J
   ];
   return {
     user_context: userContext,
-    image_and_symptom_routing_output: Object.fromEntries(
+    case_routing_output: Object.fromEntries(
       keys.filter((key) => key in parsed).map((key) => [key, parsed[key]])
     ),
   };
@@ -1424,9 +1439,10 @@ function parseAnalyzeRequest(input: unknown): AnalyzeRequest {
     throw new Error('Invalid analyze request.');
   }
   const settings = isRecord(input.settings) ? input.settings : {};
-  return {
-    imageName: getString(input, 'imageName') || 'uploaded image',
-    imageDataUrl: getString(input, 'imageDataUrl'),
+  const imageDataUrl = getString(input, 'imageDataUrl');
+  const request: AnalyzeRequest = {
+    imageName: getString(input, 'imageName') || (imageDataUrl ? 'uploaded image' : 'case context'),
+    imageDataUrl,
     mimeType: getString(input, 'mimeType') || 'image/jpeg',
     userLat: getNumber(input, 'userLat', DEFAULT_USER_LAT),
     userLon: getNumber(input, 'userLon', DEFAULT_USER_LON),
@@ -1443,6 +1459,23 @@ function parseAnalyzeRequest(input: unknown): AnalyzeRequest {
       insuranceFilter: getString(settings, 'insuranceFilter') || 'Any',
     },
   };
+  if (!request.imageDataUrl.trim() && !hasCaseContextInput(request)) {
+    throw new Error('Upload an image or enter symptoms/case context before searching.');
+  }
+  return request;
+}
+
+function getAnalysisInputMode(request: AnalyzeRequest): AnalysisInputMode {
+  const hasImage = request.imageDataUrl.trim().length > 0;
+  const hasCaseContext = hasCaseContextInput(request);
+  if (hasImage && hasCaseContext) {
+    return 'image-and-context';
+  }
+  return hasImage ? 'image' : 'case-context';
+}
+
+function hasCaseContextInput(request: AnalyzeRequest): boolean {
+  return request.userSymptoms.trim().length > 0 || request.userAddressOrNotes.trim().length > 0;
 }
 
 function getAiGatewayBaseUrl(): string {

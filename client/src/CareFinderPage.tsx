@@ -1,7 +1,17 @@
 import type { ReactNode } from 'react';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useId, useMemo, useState } from 'react';
 import { Button } from '@databricks/appkit-ui/react';
-import { AlertTriangle, CalendarCheck, Loader2, LocateFixed, MapPin, MessageCircle, Upload } from 'lucide-react';
+import {
+  AlertTriangle,
+  CalendarCheck,
+  ChevronDown,
+  ChevronRight,
+  Loader2,
+  LocateFixed,
+  MapPin,
+  MessageCircle,
+  Upload,
+} from 'lucide-react';
 
 type JsonRecord = Record<string, unknown>;
 
@@ -44,6 +54,7 @@ type FacilityResult = JsonRecord & {
 
 type AnalysisResult = {
   imageId: string;
+  inputMode?: 'image' | 'case-context' | 'image-and-context';
   parsed: JsonRecord;
   caption: string;
   urgency: unknown;
@@ -52,13 +63,6 @@ type AnalysisResult = {
   verification: JsonRecord;
   wroteResultTo: string;
   writeWarning?: string;
-};
-
-type RecentRow = {
-  image_name?: string;
-  model_name?: string;
-  caption?: string;
-  inference_ts?: string;
 };
 
 const newPatientsOptions = ['Any', 'Only facilities taking new patients', 'Only facilities with unknown status'];
@@ -100,21 +104,32 @@ export function CareFinderPage() {
   const [mimeType, setMimeType] = useState('');
   const [imageDataUrl, setImageDataUrl] = useState('');
   const [analysis, setAnalysis] = useState<AnalysisResult | null>(null);
-  const [recentRows, setRecentRows] = useState<RecentRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [locationLoading, setLocationLoading] = useState(false);
-  const [recentWarning, setRecentWarning] = useState('');
   const [error, setError] = useState('');
   const [analysisError, setAnalysisError] = useState('');
   const [analysisStatus, setAnalysisStatus] = useState('');
 
   useEffect(() => {
     void loadConfig();
-    void loadRecentAnalyses();
   }, []);
 
   const urgency = stringFromUnknown(analysis?.parsed?.urgency_level, 'unclear').toLowerCase();
   const redFlags = useMemo(() => stringsFromUnknown(analysis?.parsed?.red_flags), [analysis]);
+  const hasImageInput = imageDataUrl.length > 0;
+  const hasCaseContextInput = userSymptoms.trim().length > 0 || userAddressOrNotes.trim().length > 0;
+  const canAnalyze = hasImageInput || hasCaseContextInput;
+  const analyzeButtonLabel = hasImageInput
+    ? hasCaseContextInput
+      ? 'Analyze image and case context to find nearby care'
+      : 'Analyze image and find nearby care'
+    : 'Find nearby care from case context';
+  const analysisTitle =
+    analysis?.inputMode === 'case-context'
+      ? 'Case context analysis'
+      : analysis?.inputMode === 'image-and-context'
+        ? 'Image and case context analysis'
+        : 'Image analysis';
 
   async function loadConfig() {
     try {
@@ -125,17 +140,6 @@ export function CareFinderPage() {
       setUserLon(data.defaultLocation.lon);
     } catch (requestError) {
       setError(errorMessage(requestError));
-    }
-  }
-
-  async function loadRecentAnalyses() {
-    try {
-      const data = await getJson<{ rows: RecentRow[] }>('/api/care-finder/recent');
-      setRecentRows(Array.isArray(data.rows) ? data.rows : []);
-      setRecentWarning('');
-    } catch (requestError) {
-      setRecentRows([]);
-      setRecentWarning(errorMessage(requestError));
     }
   }
 
@@ -216,16 +220,16 @@ export function CareFinderPage() {
     }
   }
 
-  async function analyzeImage() {
-    if (!imageDataUrl) {
-      setAnalysisError('Upload an image before analysis.');
+  async function analyzeCareNeed() {
+    if (!canAnalyze) {
+      setAnalysisError('Upload an image or enter symptoms/case context before searching.');
       return;
     }
     let slowRequestTimer: number | undefined;
     setLoading(true);
     setError('');
     setAnalysisError('');
-    setAnalysisStatus('Starting image analysis...');
+    setAnalysisStatus(hasImageInput ? 'Starting image and case analysis...' : 'Starting case-context analysis...');
     setAnalysis(null);
     try {
       slowRequestTimer = window.setTimeout(() => {
@@ -234,9 +238,9 @@ export function CareFinderPage() {
         );
       }, 2500);
       const result = await postJson<AnalysisResult>('/api/care-finder/analyze', {
-        imageName,
-        imageDataUrl,
-        mimeType,
+        imageName: imageName || (hasImageInput ? 'uploaded image' : 'case context'),
+        imageDataUrl: hasImageInput ? imageDataUrl : '',
+        mimeType: hasImageInput ? mimeType : '',
         userLat,
         userLon,
         userLocationText: locationText,
@@ -254,7 +258,6 @@ export function CareFinderPage() {
       });
       setAnalysis(result);
       setAnalysisStatus('Analysis complete.');
-      void loadRecentAnalyses();
     } catch (requestError) {
       setAnalysisStatus('');
       setAnalysisError(errorMessage(requestError));
@@ -273,7 +276,8 @@ export function CareFinderPage() {
           <div>
             <h2 className="text-xl font-semibold">Care Finder Vision</h2>
             <p className="mt-1 max-w-3xl text-sm text-muted-foreground">
-              Upload an image, collect non-diagnostic care-routing observations, and rank nearby facilities.
+              Upload an image or describe the case context to collect non-diagnostic care-routing observations and rank
+              nearby facilities.
             </p>
           </div>
           <div className="grid gap-1 text-xs text-muted-foreground md:text-right">
@@ -346,7 +350,7 @@ export function CareFinderPage() {
             <h3 className="mb-3 font-semibold">Case context</h3>
             <div className="grid gap-3">
               <label className="grid gap-1 text-sm">
-                Optional address / landmark / location notes
+                Address / landmark / location notes
                 <input
                   className="h-10 rounded-md border border-input bg-background px-3"
                   value={userAddressOrNotes}
@@ -355,13 +359,14 @@ export function CareFinderPage() {
                 />
               </label>
               <label className="grid gap-1 text-sm">
-                Optional symptoms or context
+                Symptoms or case context
                 <textarea
                   className="min-h-24 rounded-md border border-input bg-background px-3 py-2"
                   value={userSymptoms}
                   onChange={(event) => setUserSymptoms(event.target.value)}
                   placeholder="child has swelling after fall; rash on arm; eye redness; wound on leg"
                 />
+                <span className="text-xs text-muted-foreground">Required when no image is uploaded.</span>
               </label>
               <div className="grid gap-3 md:grid-cols-2">
                 <label className="grid gap-1 text-sm">
@@ -389,8 +394,11 @@ export function CareFinderPage() {
           <section className="rounded-md border border-border bg-card p-4">
             <div className="mb-3 flex items-center gap-2">
               <Upload className="h-4 w-4" />
-              <h3 className="font-semibold">Upload image</h3>
+              <h3 className="font-semibold">Image or case-context search</h3>
             </div>
+            <p className="mb-3 text-sm text-muted-foreground">
+              Upload an image, or leave it blank and use the case context above.
+            </p>
             <input
               className="block w-full rounded-md border border-input bg-background p-2 text-sm"
               type="file"
@@ -409,15 +417,20 @@ export function CareFinderPage() {
                     <div className="font-medium">{imageName}</div>
                     <div className="text-muted-foreground">{mimeType}</div>
                   </div>
-                  <Button type="button" onClick={() => void analyzeImage()} disabled={loading || !imageDataUrl}>
-                    {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-                    {loading ? 'Analyzing...' : 'Analyze image and find nearby care'}
-                  </Button>
-                  {analysisStatus ? <StatusMessage tone="info" message={analysisStatus} /> : null}
-                  {analysisError ? <StatusMessage tone="error" message={analysisError} /> : null}
                 </div>
               </div>
             ) : null}
+            <div className="mt-4 space-y-3">
+              <Button type="button" onClick={() => void analyzeCareNeed()} disabled={loading || !canAnalyze}>
+                {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                {loading ? 'Finding care...' : analyzeButtonLabel}
+              </Button>
+              {!canAnalyze ? (
+                <p className="text-xs text-muted-foreground">Upload an image or enter symptoms/case context above.</p>
+              ) : null}
+              {analysisStatus ? <StatusMessage tone="info" message={analysisStatus} /> : null}
+              {analysisError ? <StatusMessage tone="error" message={analysisError} /> : null}
+            </div>
           </section>
 
           {analysis ? (
@@ -435,12 +448,12 @@ export function CareFinderPage() {
                 }
               />
 
-              <ResultSection title="Image analysis">
+              <ResultSection title={analysisTitle} collapsible>
                 {analysis.writeWarning ? <StatusMessage tone="warning" message={analysis.writeWarning} /> : null}
                 <JsonBlock value={analysis.parsed} />
               </ResultSection>
 
-              <ResultSection title="Verification: foundation-model rerank vs taxonomy-only baseline">
+              <ResultSection title="Verification: foundation-model rerank vs taxonomy-only baseline" collapsible>
                 <JsonBlock value={analysis.verification} />
                 <DataTable
                   rows={analysis.taxonomyCandidates}
@@ -448,7 +461,7 @@ export function CareFinderPage() {
                 />
               </ResultSection>
 
-              <ResultSection title="Recommended nearby facilities">
+              <ResultSection title="Recommended nearby facilities" collapsible>
                 {analysis.recommended.length === 0 ? (
                   <p className="text-sm text-muted-foreground">No facilities found within the selected radius.</p>
                 ) : (
@@ -512,46 +525,6 @@ export function CareFinderPage() {
             </div>
           </section>
 
-          <section className="rounded-md border border-border bg-card p-4">
-            <h3 className="mb-3 font-semibold">Data sources</h3>
-            <dl className="grid gap-2 text-xs text-muted-foreground">
-              <div>
-                <dt className="font-medium text-foreground">Facilities</dt>
-                <dd className="break-words">{config?.facilityTable ?? 'loading'}</dd>
-              </div>
-              <div>
-                <dt className="font-medium text-foreground">Results</dt>
-                <dd className="break-words">{config?.resultsTable ?? 'loading'}</dd>
-              </div>
-            </dl>
-          </section>
-
-          <section className="rounded-md border border-border bg-card p-4">
-            <div className="mb-3 flex items-center justify-between gap-2">
-              <h3 className="font-semibold">Recent image analyses</h3>
-              <Button type="button" variant="ghost" size="sm" onClick={() => void loadRecentAnalyses()}>
-                Refresh
-              </Button>
-            </div>
-            {recentWarning ? <p className="mb-2 text-xs text-warning">{recentWarning}</p> : null}
-            <div className="space-y-3">
-              {recentRows.length === 0 ? (
-                <p className="text-sm text-muted-foreground">No recent rows loaded.</p>
-              ) : (
-                recentRows.map((row) => (
-                  <article
-                    key={`${row.image_name ?? 'image'}-${row.inference_ts ?? ''}`}
-                    className="rounded-md border p-3 text-xs"
-                  >
-                    <div className="font-medium">{row.image_name ?? 'Image'}</div>
-                    <div className="text-muted-foreground">{row.model_name ?? ''}</div>
-                    <p className="mt-2 line-clamp-4">{row.caption ?? ''}</p>
-                    <div className="mt-2 text-muted-foreground">{row.inference_ts ?? ''}</div>
-                  </article>
-                ))
-              )}
-            </div>
-          </section>
         </aside>
       </div>
     </div>
@@ -719,11 +692,40 @@ function StatusMessage({ tone, message }: { tone: 'error' | 'warning' | 'info'; 
   return <div className={`rounded-md border p-3 text-sm ${className}`}>{message}</div>;
 }
 
-function ResultSection({ title, children }: { title: string; children: ReactNode }) {
+function ResultSection({
+  title,
+  children,
+  collapsible = false,
+}: {
+  title: string;
+  children: ReactNode;
+  collapsible?: boolean;
+}) {
+  const contentId = useId();
+  const [isExpanded, setIsExpanded] = useState(true);
+  const Icon = isExpanded ? ChevronDown : ChevronRight;
+
   return (
     <section className="rounded-md border border-border bg-card p-4">
-      <h3 className="mb-3 font-semibold">{title}</h3>
-      {children}
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <h3 className="font-semibold">{title}</h3>
+        {collapsible ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            aria-expanded={isExpanded}
+            aria-controls={contentId}
+            onClick={() => setIsExpanded((current) => !current)}
+          >
+            <Icon className="h-4 w-4" />
+            {isExpanded ? 'Collapse' : 'Expand'}
+          </Button>
+        ) : null}
+      </div>
+      <div id={contentId} hidden={collapsible && !isExpanded}>
+        {children}
+      </div>
     </section>
   );
 }
