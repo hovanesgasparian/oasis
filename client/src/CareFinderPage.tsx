@@ -632,22 +632,22 @@ export function CareFinderPage() {
   }
 
   return (
-    <div className="mx-auto max-w-7xl space-y-5">
-      <section className="rounded-md border border-border bg-card p-4">
+    <div className="mx-auto w-full max-w-7xl space-y-4 px-3 pb-8 sm:px-4 lg:px-6">
+      <section className="overflow-hidden rounded-2xl border border-border bg-gradient-to-br from-card via-card to-muted/40 p-4 shadow-sm sm:p-5">
         <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-          <div>
-            <h2 className="text-xl font-semibold">Care Finder Vision</h2>
-            <p className="mt-1 max-w-3xl text-sm text-muted-foreground">
+          <div className="min-w-0">
+            <h2 className="text-2xl font-semibold tracking-tight sm:text-3xl">Care Finder Vision</h2>
+            <p className="mt-2 max-w-3xl text-sm leading-6 text-muted-foreground">
               Upload an image, scan a camera frame, or describe the case context with text or voice to collect
               non-diagnostic care-routing observations and rank nearby facilities.
             </p>
           </div>
-          <div className="grid gap-1 text-xs text-muted-foreground md:text-right">
+          <div className="grid gap-1 rounded-xl border border-border bg-background/70 p-3 text-xs text-muted-foreground md:text-right">
             <span>Vision: {config?.visionModelName ?? 'loading'}</span>
             <span>Matcher: {config?.matchModelName ?? 'loading'}</span>
           </div>
         </div>
-        <div className="mt-4 flex gap-2 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm">
+        <div className="mt-4 flex gap-2 rounded-xl border border-destructive/30 bg-destructive/10 p-3 text-sm leading-6">
           <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
           <p>
             This tool does not diagnose medical conditions. For severe pain, breathing trouble, heavy bleeding, loss of
@@ -659,9 +659,9 @@ export function CareFinderPage() {
 
       {error ? <StatusMessage tone="error" message={error} /> : null}
 
-      <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
-        <div className="space-y-5">
-          <section className="rounded-md border border-border bg-card p-4">
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_380px] xl:items-start">
+        <div className="order-2 min-w-0 space-y-4 xl:order-1">
+          <section className="rounded-2xl border border-border bg-card p-4 shadow-sm sm:p-5">
             <div className="mb-3 flex items-center gap-2">
               <MapPin className="h-4 w-4" />
               <h3 className="font-semibold">User location</h3>
@@ -723,25 +723,14 @@ export function CareFinderPage() {
                 }
               />
 
-              <ResultSection title={analysisTitle} collapsible>
-                {analysis.writeWarning ? <StatusMessage tone="warning" message={analysis.writeWarning} /> : null}
-                <JsonBlock value={analysis.parsed} />
-              </ResultSection>
-
-              <ResultSection title="Verification: foundation-model rerank vs taxonomy-only baseline" collapsible>
-                <JsonBlock value={analysis.verification} />
-                <DataTable
-                  rows={analysis.taxonomyCandidates}
-                  columns={['name', 'distance_km', 'relevance_score', 'matched_care_domains', 'matched_care_terms']}
-                />
-              </ResultSection>
-
               <ResultSection title="Recommended nearby facilities" collapsible>
                 {analysis.recommended.length === 0 ? (
                   <p className="text-sm text-muted-foreground">No facilities found within the selected radius.</p>
                 ) : (
                   <>
-                    <DataTable rows={analysis.recommended} columns={recommendationColumns} />
+                    <div className="hidden md:block">
+                      <DataTable rows={analysis.recommended} columns={recommendationColumns} />
+                    </div>
                     <div className="space-y-3">
                       {analysis.recommended.map((facility) => (
                         <FacilityCard
@@ -753,12 +742,29 @@ export function CareFinderPage() {
                   </>
                 )}
               </ResultSection>
+
+              <ResultSection title={analysisTitle} collapsible defaultExpanded={false}>
+                {analysis.writeWarning ? <StatusMessage tone="warning" message={analysis.writeWarning} /> : null}
+                <JsonBlock value={analysis.parsed} />
+              </ResultSection>
+
+              <ResultSection
+                title="Verification: foundation-model rerank vs taxonomy-only baseline"
+                collapsible
+                defaultExpanded={false}
+              >
+                <JsonBlock value={analysis.verification} />
+                <DataTable
+                  rows={analysis.taxonomyCandidates}
+                  columns={['name', 'distance_km', 'relevance_score', 'matched_care_domains', 'matched_care_terms']}
+                />
+              </ResultSection>
             </section>
           ) : null}
         </div>
 
-        <aside className="space-y-5 xl:sticky xl:top-4 xl:self-start">
-          <section className="rounded-md border border-border bg-card p-4">
+        <aside className="order-1 space-y-4 xl:order-2 xl:sticky xl:top-4 xl:self-start">
+          <section className="rounded-2xl border border-border bg-card p-4 shadow-lg shadow-black/5 sm:p-5">
             <div className="mb-4">
               <h3 className="font-semibold">Find care</h3>
               <p className="mt-1 text-sm text-muted-foreground">
@@ -766,7 +772,7 @@ export function CareFinderPage() {
               </p>
             </div>
 
-            <div className="grid gap-2" role="radiogroup" aria-label="Care search type">
+            <div className="grid gap-2 sm:grid-cols-3 xl:grid-cols-1" role="radiogroup" aria-label="Care search type">
               <SearchModeOption
                 active={searchMode === 'case'}
                 icon={<FileText className="h-4 w-4" />}
@@ -790,7 +796,7 @@ export function CareFinderPage() {
               />
             </div>
 
-            <div className="mt-4 rounded-md border border-border bg-muted/30 p-3">
+            <div className="mt-4 rounded-2xl border border-border bg-muted/40 p-3 sm:p-4">
               <div className="mb-3">
                 <h4 className="font-medium">{selectedSearchTitle}</h4>
                 <p className="text-xs text-muted-foreground">{selectedSearchHelp}</p>
@@ -991,7 +997,12 @@ export function CareFinderPage() {
                   placeholder="today after 5 PM"
                 />
               </label>
-              <Button type="button" onClick={() => void findCareFromSelectedMode()} disabled={loading || !canAnalyze}>
+              <Button
+                type="button"
+                className="w-full justify-center"
+                onClick={() => void findCareFromSelectedMode()}
+                disabled={loading || !canAnalyze}
+              >
                 {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
                 {loading ? 'Finding care...' : 'Find care'}
               </Button>
@@ -1001,7 +1012,7 @@ export function CareFinderPage() {
             </div>
           </section>
 
-          <section className="rounded-md border border-border bg-card p-4">
+          <section className="rounded-2xl border border-border bg-card p-4 shadow-sm sm:p-5">
             <h3 className="mb-3 font-semibold">Recommendation settings</h3>
             <div className="grid gap-3">
               <NumberField
@@ -1067,8 +1078,8 @@ function SearchModeOption({
       type="button"
       role="radio"
       aria-checked={active}
-      className={`rounded-md border p-3 text-left transition-colors ${
-        active ? 'border-primary bg-primary/10' : 'border-border bg-background hover:bg-muted'
+      className={`h-full w-full rounded-xl border p-3 text-left transition-colors ${
+        active ? 'border-primary bg-primary/10 shadow-sm ring-1 ring-primary/20' : 'border-border bg-background hover:bg-muted'
       }`}
       onClick={onClick}
     >
@@ -1085,11 +1096,11 @@ function SearchModeOption({
 
 function FacilityCard({ facility }: { facility: FacilityResult }) {
   return (
-    <article className="rounded-md border border-border bg-card p-4">
+    <article className="min-w-0 overflow-hidden rounded-2xl border border-border bg-card p-4 shadow-sm">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-        <div>
-          <h4 className="font-semibold">{facility.name ?? 'Facility'}</h4>
-          <p className="mt-1 text-sm text-muted-foreground">{facility.address ?? ''}</p>
+        <div className="min-w-0">
+          <h4 className="break-words text-base font-semibold">{facility.name ?? 'Facility'}</h4>
+          <p className="mt-1 break-words text-sm leading-6 text-muted-foreground">{facility.address ?? ''}</p>
           <div className="mt-2 flex flex-wrap gap-2 text-xs">
             <Badge>{facility.distance_km ?? '?'} km</Badge>
             <Badge>FM {facility.fm_match_score ?? 0}</Badge>
@@ -1098,9 +1109,9 @@ function FacilityCard({ facility }: { facility: FacilityResult }) {
             <Badge>{facility.insurance_status ?? 'insurance unknown'}</Badge>
           </div>
         </div>
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
           <a
-            className="inline-flex h-9 items-center gap-2 rounded-md bg-primary px-3 text-sm font-medium text-primary-foreground"
+            className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-xl bg-primary px-3 text-sm font-medium text-primary-foreground sm:w-auto"
             href={facility.whatsapp_chat_url ?? '#'}
             target="_blank"
             rel="noreferrer"
@@ -1109,7 +1120,7 @@ function FacilityCard({ facility }: { facility: FacilityResult }) {
             Chat
           </a>
           <a
-            className="inline-flex h-9 items-center gap-2 rounded-md border border-input px-3 text-sm font-medium"
+            className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-xl border border-input px-3 text-sm font-medium sm:w-auto"
             href={facility.whatsapp_appointment_url ?? '#'}
             target="_blank"
             rel="noreferrer"
@@ -1119,7 +1130,7 @@ function FacilityCard({ facility }: { facility: FacilityResult }) {
           </a>
         </div>
       </div>
-      <div className="mt-4 grid gap-2 text-sm md:grid-cols-2">
+      <div className="mt-4 grid gap-3 text-sm sm:grid-cols-2">
         <InfoRow label="Phone used for WhatsApp" value={facility.whatsapp_phone_display} />
         <InfoRow label="Facility type" value={facility.facilityTypeId} />
         <InfoRow label="Matched illness need" value={facility.fm_matched_illness_need} />
@@ -1127,7 +1138,7 @@ function FacilityCard({ facility }: { facility: FacilityResult }) {
         <InfoRow label="Matched care terms" value={facility.matched_care_terms} />
         <InfoRow label="Sources" value={facility.source_urls_display} />
       </div>
-      <p className="mt-3 text-sm">{facility.fm_match_reason ?? ''}</p>
+      <p className="mt-3 break-words text-sm leading-6">{facility.fm_match_reason ?? ''}</p>
       <details className="mt-3 text-sm">
         <summary className="cursor-pointer font-medium">Facility details</summary>
         <div className="mt-2 grid gap-2">
@@ -1147,30 +1158,46 @@ function DataTable({ rows, columns }: { rows: FacilityResult[]; columns: string[
     return <p className="text-sm text-muted-foreground">No rows.</p>;
   }
   return (
-    <div className="overflow-x-auto rounded-md border">
-      <table className="min-w-full border-collapse text-left text-xs">
-        <thead className="bg-muted">
-          <tr>
-            {columns.map((column) => (
-              <th key={column} className="whitespace-nowrap px-3 py-2 font-medium">
-                {column}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((row) => (
-            <tr key={`${row.name ?? 'row'}-${row.distance_km ?? ''}-${row.fm_match_score ?? ''}`} className="border-t">
+    <>
+      <div className="grid gap-3 md:hidden">
+        {rows.map((row, index) => (
+          <article
+            key={`${row.name ?? 'row'}-${row.distance_km ?? ''}-${row.fm_match_score ?? ''}-${index}`}
+            className="min-w-0 rounded-xl border border-border bg-background p-3 shadow-sm"
+          >
+            <div className="grid gap-3">
               {columns.map((column) => (
-                <td key={column} className="max-w-[360px] px-3 py-2 align-top">
-                  {formatCell(row[column])}
-                </td>
+                <InfoRow key={column} label={column} value={row[column]} />
+              ))}
+            </div>
+          </article>
+        ))}
+      </div>
+      <div className="hidden max-w-full overflow-x-auto rounded-xl border md:block">
+        <table className="min-w-full border-collapse text-left text-xs">
+          <thead className="bg-muted">
+            <tr>
+              {columns.map((column) => (
+                <th key={column} className="whitespace-nowrap px-3 py-2 font-medium">
+                  {column}
+                </th>
               ))}
             </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+          </thead>
+          <tbody>
+            {rows.map((row) => (
+              <tr key={`${row.name ?? 'row'}-${row.distance_km ?? ''}-${row.fm_match_score ?? ''}`} className="border-t">
+                {columns.map((column) => (
+                  <td key={column} className="max-w-[280px] whitespace-normal break-words px-3 py-2 align-top">
+                    {formatCell(row[column])}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </>
   );
 }
 
@@ -1241,26 +1268,28 @@ function StatusMessage({ tone, message }: { tone: 'error' | 'warning' | 'info'; 
       : tone === 'warning'
         ? 'border-warning/40 bg-warning/10 text-foreground'
         : 'border-border bg-muted text-foreground';
-  return <div className={`rounded-md border p-3 text-sm ${className}`}>{message}</div>;
+  return <div className={`break-words rounded-xl border p-3 text-sm leading-6 ${className}`}>{message}</div>;
 }
 
 function ResultSection({
   title,
   children,
   collapsible = false,
+  defaultExpanded = true,
 }: {
   title: string;
   children: ReactNode;
   collapsible?: boolean;
+  defaultExpanded?: boolean;
 }) {
   const contentId = useId();
-  const [isExpanded, setIsExpanded] = useState(true);
+  const [isExpanded, setIsExpanded] = useState(defaultExpanded);
   const Icon = isExpanded ? ChevronDown : ChevronRight;
 
   return (
-    <section className="rounded-md border border-border bg-card p-4">
-      <div className="mb-3 flex items-center justify-between gap-3">
-        <h3 className="font-semibold">{title}</h3>
+    <section className="min-w-0 overflow-hidden rounded-2xl border border-border bg-card p-4 shadow-sm sm:p-5">
+      <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <h3 className="min-w-0 break-words font-semibold">{title}</h3>
         {collapsible ? (
           <Button
             type="button"
@@ -1268,6 +1297,7 @@ function ResultSection({
             size="sm"
             aria-expanded={isExpanded}
             aria-controls={contentId}
+            className="self-start sm:self-auto"
             onClick={() => setIsExpanded((current) => !current)}
           >
             <Icon className="h-4 w-4" />
@@ -1275,7 +1305,7 @@ function ResultSection({
           </Button>
         ) : null}
       </div>
-      <div id={contentId} hidden={collapsible && !isExpanded}>
+      <div id={contentId} className="min-w-0" hidden={collapsible && !isExpanded}>
         {children}
       </div>
     </section>
@@ -1283,20 +1313,28 @@ function ResultSection({
 }
 
 function JsonBlock({ value }: { value: unknown }) {
-  return <pre className="max-h-96 overflow-auto rounded-md bg-muted p-3 text-xs">{JSON.stringify(value, null, 2)}</pre>;
+  return (
+    <pre className="max-h-80 max-w-full overflow-auto whitespace-pre-wrap break-words rounded-xl bg-muted p-3 text-[11px] leading-5 sm:max-h-96 sm:text-xs">
+      {JSON.stringify(value, null, 2)}
+    </pre>
+  );
 }
 
 function InfoRow({ label, value }: { label: string; value: unknown }) {
   return (
-    <div>
+    <div className="min-w-0">
       <div className="text-xs font-medium uppercase text-muted-foreground">{label}</div>
-      <div className="break-words">{formatCell(value)}</div>
+      <div className="break-words leading-6">{formatCell(value)}</div>
     </div>
   );
 }
 
 function Badge({ children }: { children: ReactNode }) {
-  return <span className="rounded-md border border-border bg-muted px-2 py-1">{children}</span>;
+  return (
+    <span className="inline-flex max-w-full items-center break-words rounded-full border border-border bg-muted px-2.5 py-1 text-[11px] leading-4">
+      {children}
+    </span>
+  );
 }
 
 async function getJson<T>(url: string): Promise<T> {
