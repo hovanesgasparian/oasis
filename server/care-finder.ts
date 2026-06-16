@@ -463,7 +463,7 @@ Analyze the ${hasImage ? 'image and case context' : 'case context'} and return J
   "taxonomy_terms": ["plain-language service, equipment, procedure, capability, and specialty search terms"],
   "recommended_care_types": ["emergency", "urgent care", "general hospital", "orthopedics", "dermatology", "pediatrics", "ophthalmology", "internal medicine", "surgery", "diagnostics", "pharmacy"],
   "specialties_to_consider": ["clinical specialties that may be relevant"],
-  "equipment_or_services_needed": ["x-ray", "blood laboratory", "ICU", "operation theater", "wound care", "imaging", "pediatric care", etc."],
+  "equipment_or_services_needed": ["x-ray", "blood laboratory", "ICU", "operation theater", "wound care", "imaging", "pediatric care", etc.],
   "self_care_cautions": ["brief safety cautions only"],
   "confidence_notes": "limitations of image/context-only assessment"
 }`;
@@ -562,10 +562,9 @@ Score each candidate from 0 to 100. Include every candidate exactly once.`;
 }
 
 async function callAiGateway(body: JsonRecord): Promise<JsonRecord> {
-  const token = process.env.DATABRICKS_TOKEN;
-  if (!token) {
-    throw new Error('DATABRICKS_TOKEN is not set. Add it as a Databricks App environment variable or secret.');
-  }
+  // Get authentication token from WorkspaceClient (uses OAuth2 in Databricks Apps)
+  const client = getWorkspaceClient();
+  const token = await getAuthToken(client);
 
   const response = await fetch(`${getAiGatewayBaseUrl()}/chat/completions`, {
     method: 'POST',
@@ -584,6 +583,34 @@ async function callAiGateway(body: JsonRecord): Promise<JsonRecord> {
     );
   }
   return payload;
+}
+
+async function getAuthToken(client: WorkspaceClient): Promise<string> {
+  // Access the underlying API client's auth config
+  const apiClient = (client as any).apiClient;
+  if (!apiClient) {
+    throw new Error('Unable to access API client for authentication');
+  }
+  
+  // Get the auth provider and retrieve token
+  const config = apiClient.config;
+  if (config && config.token) {
+    return config.token;
+  }
+  
+  // For OAuth2 / M2M token, we need to call the auth provider
+  const authProvider = config?.authProvider;
+  if (authProvider && typeof authProvider.getToken === 'function') {
+    const token = await authProvider.getToken();
+    return token;
+  }
+  
+  // Fallback: try to get from environment (for backwards compatibility)
+  if (process.env.DATABRICKS_TOKEN) {
+    return process.env.DATABRICKS_TOKEN;
+  }
+  
+  throw new Error('Unable to retrieve authentication token. Ensure the app is running in a Databricks environment with proper OAuth2 credentials.');
 }
 
 async function loadFacilities(userLat: number, userLon: number, maxDistanceKm: number): Promise<FacilityRow[]> {
