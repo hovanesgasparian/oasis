@@ -49,6 +49,8 @@ const DEFAULT_FACILITY_TABLE = 'databricks_virtue_foundation_dataset_dais_2026.v
 const DEFAULT_USER_LAT = 23.0225;
 const DEFAULT_USER_LON = 72.5714;
 const DEFAULT_USER_LOCATION_LABEL = 'Ahmedabad, Gujarat';
+const AI_GATEWAY_TOKEN_SECRET_SCOPE = 'serving-endpoint';
+const AI_GATEWAY_TOKEN_SECRET_KEY = 'DATABRICKS_TOKEN';
 
 const TAXONOMY_FIELDS = [
   'specialties',
@@ -300,6 +302,7 @@ const CARE_TAXONOMY: Record<
 };
 
 let workspaceClient: WorkspaceClient | null = null;
+let aiGatewayTokenPromise: Promise<string> | null = null;
 
 export function registerCareFinderRoutes(app: Application): void {
   app.get('/api/care-finder/config', (_req: Request, res: Response) => {
@@ -330,6 +333,16 @@ export function registerCareFinderRoutes(app: Application): void {
       const lat = getNumber(req.body, 'lat', DEFAULT_USER_LAT);
       const lon = getNumber(req.body, 'lon', DEFAULT_USER_LON);
       res.json(await reverseGeocodeLatLon(lat, lon));
+    } catch (error) {
+      sendRouteError(res, error);
+    }
+  });
+
+  app.post('/api/care-finder/translate', async (req: Request, res: Response) => {
+    try {
+      const text = getString(req.body, 'text');
+      const sourceLanguage = getString(req.body, 'sourceLanguage');
+      res.json(await translateVoiceTranscript(text, sourceLanguage));
     } catch (error) {
       sendRouteError(res, error);
     }
@@ -562,10 +575,7 @@ Score each candidate from 0 to 100. Include every candidate exactly once.`;
 }
 
 async function callAiGateway(body: JsonRecord): Promise<JsonRecord> {
-  const token = process.env.DATABRICKS_TOKEN;
-  if (!token) {
-    throw new Error('DATABRICKS_TOKEN is not set. Add it as a Databricks App environment variable or secret.');
-  }
+  const token = await getAiGatewayToken();
 
   const response = await fetch(`${getAiGatewayBaseUrl()}/chat/completions`, {
     method: 'POST',
@@ -584,6 +594,69 @@ async function callAiGateway(body: JsonRecord): Promise<JsonRecord> {
     );
   }
   return payload;
+}
+
+async function getAiGatewayToken(): Promise<string> {
+  aiGatewayTokenPromise ??= loadAiGatewayTokenFromSecret().catch((error: unknown) => {
+    aiGatewayTokenPromise = null;
+    throw error;
+  });
+  return aiGatewayTokenPromise;
+}
+
+async function loadAiGatewayTokenFromSecret(): Promise<string> {
+  const secret = await getWorkspaceClient().secrets.getSecret({
+    scope: AI_GATEWAY_TOKEN_SECRET_SCOPE,
+    key: AI_GATEWAY_TOKEN_SECRET_KEY,
+  });
+  const token = decodeSecretValue(stringFromUnknown(secret.value));
+  if (!token) {
+    throw new Error(
+      `Databricks secret ${AI_GATEWAY_TOKEN_SECRET_SCOPE}/${AI_GATEWAY_TOKEN_SECRET_KEY} is empty or unreadable. Grant the app service principal READ on the secret scope.`
+    );
+  }
+  return token;
+}
+
+function decodeSecretValue(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return '';
+  }
+  if (/^dapi[A-Za-z0-9._-]+$/.test(trimmed) || trimmed.includes('.')) {
+    return trimmed;
+  }
+
+  const decoded = tryDecodeBase64(trimmed);
+  return decoded ?? trimmed;
+}
+
+function tryDecodeBase64(value: string): string | null {
+  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(value) || value.length % 4 !== 0) {
+    return null;
+  }
+
+  const decoded = Buffer.from(value, 'base64').toString('utf8').trim();
+  if (!decoded || hasControlCharacters(decoded)) {
+    return null;
+  }
+
+  const reencoded = Buffer.from(decoded, 'utf8').toString('base64').replace(/=+$/, '');
+  if (reencoded !== value.replace(/=+$/, '')) {
+    return null;
+  }
+
+  return decoded;
+}
+
+function hasControlCharacters(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code < 32 || code === 127) {
+      return true;
+    }
+  }
+  return false;
 }
 
 async function loadFacilities(userLat: number, userLon: number, maxDistanceKm: number): Promise<FacilityRow[]> {
@@ -1463,6 +1536,46 @@ function parseAnalyzeRequest(input: unknown): AnalyzeRequest {
     throw new Error('Upload an image or enter symptoms/case context before searching.');
   }
   return request;
+}
+
+async function translateVoiceTranscript(text: string, sourceLanguage: string): Promise<JsonRecord> {
+  const transcript = text.trim();
+  if (!transcript) {
+    throw new Error('Enter or record a voice transcript before translating.');
+  }
+  const languageLabel = sourceLanguage.trim() || 'browser default or unknown';
+  const prompt = `
+Translate this voice transcript to clear English for care-finder case search.
+
+Rules:
+- Preserve all symptoms, timing, locations, patient context, and medical terms.
+- Do not diagnose, summarize away details, or add advice.
+- If the transcript is already English, return it as the English translation.
+- Return JSON only.
+
+Source language: ${languageLabel}
+Transcript:
+${transcript}
+
+Schema:
+{
+  "source_language": "detected or provided language",
+  "english_translation": "faithful English translation"
+}`;
+
+  const response = await callAiGateway({
+    model: getMatchModelName(),
+    messages: [{ role: 'user', content: prompt }],
+    max_tokens: 800,
+    temperature: 0,
+  });
+  const content = extractMessageContent(response);
+  const parsed = safeJsonLoads(content);
+  const englishTranslation = getString(parsed, 'english_translation') || stringFromUnknown(parsed.raw_text ?? content);
+  return {
+    sourceLanguage: getString(parsed, 'source_language') || languageLabel,
+    englishTranslation,
+  };
 }
 
 function getAnalysisInputMode(request: AnalyzeRequest): AnalysisInputMode {

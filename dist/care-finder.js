@@ -9,6 +9,8 @@ const DEFAULT_FACILITY_TABLE = "databricks_virtue_foundation_dataset_dais_2026.v
 const DEFAULT_USER_LAT = 23.0225;
 const DEFAULT_USER_LON = 72.5714;
 const DEFAULT_USER_LOCATION_LABEL = "Ahmedabad, Gujarat";
+const AI_GATEWAY_TOKEN_SECRET_SCOPE = "serving-endpoint";
+const AI_GATEWAY_TOKEN_SECRET_KEY = "DATABRICKS_TOKEN";
 const TAXONOMY_FIELDS = [
 	"specialties",
 	"procedure",
@@ -297,6 +299,7 @@ const CARE_TAXONOMY = {
 	}
 };
 let workspaceClient = null;
+let aiGatewayTokenPromise = null;
 function registerCareFinderRoutes(app) {
 	app.get("/api/care-finder/config", (_req, res) => {
 		res.json({
@@ -353,8 +356,9 @@ async function analyzeAndRecommend(request) {
 		`User address or notes: ${request.userAddressOrNotes}`,
 		`User symptoms or context: ${request.userSymptoms}`
 	].join("\n");
-	const visionResult = await runVisionModel(request.imageDataUrl, userContext);
-	const parsed = isRecord(visionResult.parsed) ? visionResult.parsed : {};
+	const inputMode = getAnalysisInputMode(request);
+	const routingResult = await runCareRoutingModel(request.imageDataUrl, userContext);
+	const parsed = isRecord(routingResult.parsed) ? routingResult.parsed : {};
 	if (!Array.isArray(parsed.care_domains) || parsed.care_domains.length === 0) parsed.care_domains = inferCareDomains(parsed);
 	const taxonomyCandidates = recommendFacilities(await loadFacilities(request.userLat, request.userLon, request.settings.maxDistanceKm), request.userLat, request.userLon, parsed, request.settings, request.settings.fmCandidateCount);
 	const recommended = await rerankWithFoundationModel(taxonomyCandidates, parsed, userContext, request.settings.topN, request.userAddressOrNotes, request.userSymptoms, request.userName, request.appointmentPreference);
@@ -366,10 +370,10 @@ async function analyzeAndRecommend(request) {
 			imageId,
 			imageName: request.imageName,
 			facilityId: primaryFacilityId,
-			modelName: `${getVisionModelName()} + ${getMatchModelName()}`,
+			modelName: `${getVisionModelName()} (${inputMode}) + ${getMatchModelName()}`,
 			prompt: userContext,
-			caption: visionResult.caption,
-			rawResponse: visionResult.rawResponse
+			caption: routingResult.caption,
+			rawResponse: routingResult.rawResponse
 		});
 	} catch (error) {
 		writeWarning = `Analysis completed, but writing the result to ${getResultsTable()} failed: ${errorMessage(error)}`;
@@ -377,8 +381,9 @@ async function analyzeAndRecommend(request) {
 	}
 	return {
 		imageId,
+		inputMode,
 		parsed,
-		caption: visionResult.caption,
+		caption: routingResult.caption,
 		urgency: parsed.urgency_level ?? "unclear",
 		taxonomyCandidates: taxonomyCandidates.slice(0, request.settings.topN),
 		recommended,
@@ -387,14 +392,16 @@ async function analyzeAndRecommend(request) {
 		writeWarning
 	};
 }
-async function runVisionModel(imageDataUrl, userContext) {
+async function runCareRoutingModel(imageDataUrl, userContext) {
+	const hasImage = imageDataUrl.trim().length > 0;
 	const prompt = `
-You are helping route a user to appropriate care based on an uploaded image.
+You are helping route a user to appropriate care based on ${hasImage ? "an uploaded image and user-provided case context" : "user-provided case context"}.
 
 Important safety rules:
 - Do not provide a definitive medical diagnosis.
-- Do not claim certainty from an image.
-- Provide non-diagnostic visual observations only.
+- Do not claim certainty from limited user-provided information.
+- Provide non-diagnostic routing observations only.
+- ${hasImage ? "Use non-diagnostic visual observations from the image plus any user-described symptoms or context." : "No image was provided. Use only the user-provided text and do not claim visual observations or image findings."}
 - Mention that a licensed clinician should evaluate concerning symptoms.
 - If red flags are visible or described, recommend urgent or emergency care.
 
@@ -404,11 +411,11 @@ ${userContext}
 Use these generalized care-domain taxonomy ids when relevant:
 ${JSON.stringify(Object.keys(CARE_TAXONOMY))}
 
-Analyze the image and return JSON only with this schema:
+Analyze the ${hasImage ? "image and case context" : "case context"} and return JSON only with this schema:
 {
   "brief_summary": "one short non-diagnostic summary",
-  "possible_conditions_or_findings": ["possible visible issues, not diagnoses"],
-  "observed_injury_or_ailment_features": ["visible cues such as swelling, cut, rash, bruising, burn, deformity, eye redness, etc."],
+  "possible_conditions_or_findings": ["possible reported or visible issues, not diagnoses"],
+  "observed_injury_or_ailment_features": ["reported or visible cues such as swelling, cut, rash, bruising, burn, deformity, eye redness, pain, fever, etc."],
   "urgency_level": "emergency | urgent | routine | unclear",
   "red_flags": ["visible or user-described red flags"],
   "care_domains": ["taxonomy ids from the list above"],
@@ -417,21 +424,23 @@ Analyze the image and return JSON only with this schema:
   "specialties_to_consider": ["clinical specialties that may be relevant"],
   "equipment_or_services_needed": ["x-ray", "blood laboratory", "ICU", "operation theater", "wound care", "imaging", "pediatric care", etc."],
   "self_care_cautions": ["brief safety cautions only"],
-  "confidence_notes": "limitations of image-only assessment"
+  "confidence_notes": "limitations of image/context-only assessment"
 }`;
+	const content = hasImage ? [{
+		type: "text",
+		text: prompt
+	}, {
+		type: "image_url",
+		image_url: { url: imageDataUrl }
+	}] : prompt;
 	const response = await callAiGateway({
 		model: getVisionModelName(),
 		messages: [{
 			role: "user",
-			content: [{
-				type: "text",
-				text: prompt
-			}, {
-				type: "image_url",
-				image_url: { url: imageDataUrl }
-			}]
+			content
 		}],
-		max_tokens: 1200
+		max_tokens: 1200,
+		temperature: 0
 	});
 	const caption = extractMessageContent(response);
 	return {
@@ -448,7 +457,7 @@ async function runFacilityMatchModel(parsed, userContext, candidates) {
 	const candidatePayloads = candidates.map((row, index) => facilityCandidatePayload(row, `c${index + 1}`));
 	const prompt = `
 You are a healthcare facility routing assistant. You are not diagnosing.
-Your job is to match the reported illness and non-diagnostic image findings to the most appropriate facility.
+Your job is to match the reported illness and non-diagnostic routing findings to the most appropriate facility.
 
 Use BOTH sources of evidence:
 1. Generated recommender taxonomy context.
@@ -461,7 +470,7 @@ Do not recommend a facility only because it is nearby if the capability match is
 Generated taxonomy context:
 ${taxonomyContextForPrompt()}
 
-Reported illness and image-routing context:
+Reported illness and care-routing context:
 ${JSON.stringify(buildReportedIllnessContext(parsed, userContext))}
 
 Candidate facilities:
@@ -500,8 +509,7 @@ Score each candidate from 0 to 100. Include every candidate exactly once.`;
 	return parsedResponse;
 }
 async function callAiGateway(body) {
-	const token = process.env.DATABRICKS_TOKEN;
-	if (!token) throw new Error("DATABRICKS_TOKEN is not set. Add it as a Databricks App environment variable or secret.");
+	const token = await getAiGatewayToken();
 	const response = await fetch(`${getAiGatewayBaseUrl()}/chat/completions`, {
 		method: "POST",
 		headers: {
@@ -514,6 +522,41 @@ async function callAiGateway(body) {
 	const payload = text ? safeJsonLoads(text) : {};
 	if (!response.ok) throw new Error(`AI Gateway request failed (${response.status}): ${getString(payload, "message") || response.statusText}`);
 	return payload;
+}
+async function getAiGatewayToken() {
+	aiGatewayTokenPromise ??= loadAiGatewayTokenFromSecret().catch((error) => {
+		aiGatewayTokenPromise = null;
+		throw error;
+	});
+	return aiGatewayTokenPromise;
+}
+async function loadAiGatewayTokenFromSecret() {
+	const token = decodeSecretValue(stringFromUnknown((await getWorkspaceClient().secrets.getSecret({
+		scope: AI_GATEWAY_TOKEN_SECRET_SCOPE,
+		key: AI_GATEWAY_TOKEN_SECRET_KEY
+	})).value));
+	if (!token) throw new Error(`Databricks secret ${AI_GATEWAY_TOKEN_SECRET_SCOPE}/${AI_GATEWAY_TOKEN_SECRET_KEY} is empty or unreadable. Grant the app service principal READ on the secret scope.`);
+	return token;
+}
+function decodeSecretValue(value) {
+	const trimmed = value.trim();
+	if (!trimmed) return "";
+	if (/^dapi[A-Za-z0-9._-]+$/.test(trimmed) || trimmed.includes(".")) return trimmed;
+	return tryDecodeBase64(trimmed) ?? trimmed;
+}
+function tryDecodeBase64(value) {
+	if (!/^[A-Za-z0-9+/]+={0,2}$/.test(value) || value.length % 4 !== 0) return null;
+	const decoded = Buffer.from(value, "base64").toString("utf8").trim();
+	if (!decoded || hasControlCharacters(decoded)) return null;
+	if (Buffer.from(decoded, "utf8").toString("base64").replace(/=+$/, "") !== value.replace(/=+$/, "")) return null;
+	return decoded;
+}
+function hasControlCharacters(value) {
+	for (let index = 0; index < value.length; index += 1) {
+		const code = value.charCodeAt(index);
+		if (code < 32 || code === 127) return true;
+	}
+	return false;
 }
 async function loadFacilities(userLat, userLon, maxDistanceKm) {
 	const latDelta = Math.max(maxDistanceKm / 111, .25);
@@ -901,7 +944,7 @@ function buildWhatsappMessage(row, parsed, userAddressOrNotes, userSymptoms, use
 		row.distance_km !== void 0 ? `Approximate distance from user: ${row.distance_km} km` : "",
 		userAddressOrNotes ? `User location/context: ${userAddressOrNotes}` : "",
 		userSymptoms ? `Symptoms/context provided by user: ${userSymptoms}` : "",
-		parsed.brief_summary ? `Non-diagnostic image summary: ${stringFromUnknown(parsed.brief_summary)}` : "",
+		parsed.brief_summary ? `Non-diagnostic care-routing summary: ${stringFromUnknown(parsed.brief_summary)}` : "",
 		`Urgency flagged by app: ${stringFromUnknown(parsed.urgency_level, "unclear")}`,
 		row.matched_care_domains ? `Relevant care domains: ${row.matched_care_domains}` : "",
 		row.matched_care_terms ? `Relevant care needs: ${row.matched_care_terms}` : "",
@@ -1019,7 +1062,7 @@ function taxonomyContextForPrompt() {
 function buildReportedIllnessContext(parsed, userContext) {
 	return {
 		user_context: userContext,
-		image_and_symptom_routing_output: Object.fromEntries([
+		case_routing_output: Object.fromEntries([
 			"brief_summary",
 			"possible_conditions_or_findings",
 			"observed_injury_or_ailment_features",
@@ -1112,9 +1155,10 @@ function extractMessageContent(response) {
 function parseAnalyzeRequest(input) {
 	if (!isRecord(input)) throw new Error("Invalid analyze request.");
 	const settings = isRecord(input.settings) ? input.settings : {};
-	return {
-		imageName: getString(input, "imageName") || "uploaded image",
-		imageDataUrl: getString(input, "imageDataUrl"),
+	const imageDataUrl = getString(input, "imageDataUrl");
+	const request = {
+		imageName: getString(input, "imageName") || (imageDataUrl ? "uploaded image" : "case context"),
+		imageDataUrl,
 		mimeType: getString(input, "mimeType") || "image/jpeg",
 		userLat: getNumber(input, "userLat", DEFAULT_USER_LAT),
 		userLon: getNumber(input, "userLon", DEFAULT_USER_LON),
@@ -1131,6 +1175,17 @@ function parseAnalyzeRequest(input) {
 			insuranceFilter: getString(settings, "insuranceFilter") || "Any"
 		}
 	};
+	if (!request.imageDataUrl.trim() && !hasCaseContextInput(request)) throw new Error("Upload an image or enter symptoms/case context before searching.");
+	return request;
+}
+function getAnalysisInputMode(request) {
+	const hasImage = request.imageDataUrl.trim().length > 0;
+	const hasCaseContext = hasCaseContextInput(request);
+	if (hasImage && hasCaseContext) return "image-and-context";
+	return hasImage ? "image" : "case-context";
+}
+function hasCaseContextInput(request) {
+	return request.userSymptoms.trim().length > 0 || request.userAddressOrNotes.trim().length > 0;
 }
 function getAiGatewayBaseUrl() {
 	if (process.env.AI_GATEWAY_BASE_URL) return process.env.AI_GATEWAY_BASE_URL;

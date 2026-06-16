@@ -121,7 +121,6 @@ The Care Finder Vision tab is a Node/React port of the previous Streamlit workfl
 Set these values in `.env` for local development or in the Databricks App environment for deployment:
 
 ```env
-DATABRICKS_TOKEN=your_databricks_token_for_ai_gateway
 DATABRICKS_HOST=https://dbc-ee0ead6d-c943.cloud.databricks.com
 DATABRICKS_WAREHOUSE_ID=1bd5a57a33ae6d7c
 VISION_MODEL_NAME=databricks-gemma-3-12b
@@ -130,7 +129,7 @@ FACILITY_TABLE=databricks_virtue_foundation_dataset_dais_2026.virtue_foundation_
 RESULTS_TABLE=workspace.default.camera_vision_results
 ```
 
-The app uses the existing Databricks SDK authentication context for SQL statement execution and `DATABRICKS_TOKEN` for the AI Gateway-compatible chat completions calls. `DATABRICKS_HOST` should be the full workspace URL including `https://`. Keep the token in `.env` or Databricks secrets, never in tracked source.
+The app uses the existing Databricks SDK authentication context for SQL statement execution and for reading the AI Gateway bearer token from Databricks secret scope `serving-endpoint` with key `DATABRICKS_TOKEN`. `DATABRICKS_HOST` should be the full workspace URL including `https://`. For local development, authenticate the Databricks SDK with the CLI or another SDK-supported method; for deployment, make sure the app service principal has `READ` permission on the secret scope.
 
 ### Build
 

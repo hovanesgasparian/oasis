@@ -7,10 +7,12 @@ import {
   Camera,
   ChevronDown,
   ChevronRight,
+  FileText,
   Loader2,
   LocateFixed,
   MapPin,
   MessageCircle,
+  Mic,
   Upload,
 } from 'lucide-react';
 
@@ -72,9 +74,73 @@ type CapturedImage = {
   dataUrl: string;
 };
 
+type SearchMode = 'case' | 'image' | 'voice';
+
+type TranslationResponse = {
+  sourceLanguage: string;
+  englishTranslation: string;
+};
+
+type BrowserSpeechRecognition = {
+  continuous: boolean;
+  interimResults: boolean;
+  lang: string;
+  maxAlternatives: number;
+  onend: (() => void) | null;
+  onerror: ((event: SpeechRecognitionErrorEventLike) => void) | null;
+  onresult: ((event: SpeechRecognitionEventLike) => void) | null;
+  abort: () => void;
+  start: () => void;
+  stop: () => void;
+};
+
+type SpeechRecognitionConstructor = new () => BrowserSpeechRecognition;
+
+type SpeechRecognitionAlternativeLike = {
+  transcript: string;
+};
+
+type SpeechRecognitionResultLike = {
+  isFinal: boolean;
+  length: number;
+  [index: number]: SpeechRecognitionAlternativeLike | undefined;
+};
+
+type SpeechRecognitionResultListLike = {
+  length: number;
+  [index: number]: SpeechRecognitionResultLike | undefined;
+};
+
+type SpeechRecognitionEventLike = {
+  resultIndex: number;
+  results: SpeechRecognitionResultListLike;
+};
+
+type SpeechRecognitionErrorEventLike = {
+  error?: string;
+  message?: string;
+};
+
 const newPatientsOptions = ['Any', 'Only facilities taking new patients', 'Only facilities with unknown status'];
 
 const insuranceOptions = ['Any', 'Insurance accepted/mentioned', 'Self-pay/cash accepted/mentioned', 'Unknown'];
+
+const voiceLanguageOptions = [
+  { value: 'en-IN', label: 'English (India)' },
+  { value: 'gu-IN', label: 'Gujarati' },
+  { value: 'hi-IN', label: 'Hindi' },
+  { value: 'ta-IN', label: 'Tamil' },
+  { value: 'te-IN', label: 'Telugu' },
+  { value: 'mr-IN', label: 'Marathi' },
+  { value: 'bn-IN', label: 'Bengali' },
+  { value: 'kn-IN', label: 'Kannada' },
+  { value: 'ml-IN', label: 'Malayalam' },
+  { value: 'pa-IN', label: 'Punjabi' },
+  { value: 'ur-IN', label: 'Urdu' },
+  { value: 'es-ES', label: 'Spanish' },
+  { value: 'fr-FR', label: 'French' },
+  { value: 'ar-SA', label: 'Arabic' },
+];
 
 const recommendationColumns = [
   'name',
@@ -92,8 +158,10 @@ const recommendationColumns = [
 ];
 
 export function CareFinderPage() {
+  const voiceLanguageListId = useId();
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const cameraStreamRef = useRef<MediaStream | null>(null);
+  const speechRecognitionRef = useRef<BrowserSpeechRecognition | null>(null);
   const [config, setConfig] = useState<CareFinderConfig | null>(null);
   const [locationText, setLocationText] = useState('Ahmedabad, Gujarat');
   const [userLat, setUserLat] = useState(23.0225);
@@ -109,11 +177,20 @@ export function CareFinderPage() {
   const [topN, setTopN] = useState(5);
   const [newPatientsFilter, setNewPatientsFilter] = useState('Any');
   const [insuranceFilter, setInsuranceFilter] = useState('Any');
+  const [searchMode, setSearchMode] = useState<SearchMode>('case');
   const [imageName, setImageName] = useState('');
   const [mimeType, setMimeType] = useState('');
   const [imageDataUrl, setImageDataUrl] = useState('');
   const [cameraActive, setCameraActive] = useState(false);
   const [cameraLoading, setCameraLoading] = useState(false);
+  const [voiceTranscript, setVoiceTranscript] = useState('');
+  const [voiceEnglishTranscript, setVoiceEnglishTranscript] = useState('');
+  const [voiceInterimTranscript, setVoiceInterimTranscript] = useState('');
+  const [voiceLanguage, setVoiceLanguage] = useState('');
+  const [voiceListening, setVoiceListening] = useState(false);
+  const [voiceTranslationLoading, setVoiceTranslationLoading] = useState(false);
+  const [voiceStatus, setVoiceStatus] = useState('');
+  const [voiceError, setVoiceError] = useState('');
   const [analysis, setAnalysis] = useState<AnalysisResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [locationLoading, setLocationLoading] = useState(false);
@@ -129,6 +206,8 @@ export function CareFinderPage() {
     return () => {
       stopMediaStream(cameraStreamRef.current);
       cameraStreamRef.current = null;
+      abortSpeechRecognition(speechRecognitionRef.current);
+      speechRecognitionRef.current = null;
     };
   }, []);
 
@@ -147,13 +226,27 @@ export function CareFinderPage() {
   const urgency = stringFromUnknown(analysis?.parsed?.urgency_level, 'unclear').toLowerCase();
   const redFlags = useMemo(() => stringsFromUnknown(analysis?.parsed?.red_flags), [analysis]);
   const hasImageInput = imageDataUrl.length > 0;
-  const hasCaseContextInput = userSymptoms.trim().length > 0 || userAddressOrNotes.trim().length > 0;
-  const canAnalyze = hasImageInput || hasCaseContextInput;
-  const analyzeButtonLabel = hasImageInput
-    ? hasCaseContextInput
-      ? 'Analyze image and case context to find nearby care'
-      : 'Analyze image and find nearby care'
-    : 'Find nearby care from case context';
+  const supportsVoiceInput = getSpeechRecognitionConstructor() !== null;
+  const hasOriginalVoiceTranscript = voiceTranscript.trim().length > 0;
+  const hasVoiceTranscript = hasOriginalVoiceTranscript || voiceEnglishTranscript.trim().length > 0;
+  const hasTypedCaseContext = userSymptoms.trim().length > 0 || userAddressOrNotes.trim().length > 0;
+  const hasImageSearchInput = hasImageInput || cameraActive;
+  const canAnalyze =
+    searchMode === 'case' ? hasTypedCaseContext : searchMode === 'image' ? hasImageSearchInput : hasVoiceTranscript;
+  const selectedSearchTitle =
+    searchMode === 'case' ? 'Case search' : searchMode === 'image' ? 'Image search' : 'Voice search';
+  const selectedSearchHelp =
+    searchMode === 'case'
+      ? 'Enter symptoms or case context in text.'
+      : searchMode === 'image'
+        ? 'Upload an image or use the live camera.'
+        : 'Record or paste speech, then translate if needed.';
+  const missingSearchInputMessage =
+    searchMode === 'case'
+      ? 'Enter symptoms/case context or location notes before finding care.'
+      : searchMode === 'image'
+        ? 'Upload an image or start the camera before finding care.'
+        : 'Record, paste, or enter a voice transcript before finding care.';
   const analysisTitle =
     analysis?.inputMode === 'case-context'
       ? 'Case context analysis'
@@ -230,6 +323,7 @@ export function CareFinderPage() {
     setAnalysisError('');
     setAnalysisStatus('');
     setAnalysis(null);
+    setSearchMode('image');
     if (!file) {
       setImageName('');
       setMimeType('');
@@ -255,6 +349,7 @@ export function CareFinderPage() {
     setError('');
     setAnalysisError('');
     setAnalysisStatus('');
+    setSearchMode('image');
     setCameraLoading(true);
     try {
       if (!navigator.mediaDevices?.getUserMedia) {
@@ -340,32 +435,163 @@ export function CareFinderPage() {
     }
   }
 
-  async function scanCameraFrame() {
-    setError('');
-    setAnalysisError('');
+  function startVoiceTranscription() {
+    setVoiceError('');
+    setVoiceStatus('');
+    setVoiceInterimTranscript('');
+    setSearchMode('voice');
+    const SpeechRecognition = getSpeechRecognitionConstructor();
+    if (!SpeechRecognition) {
+      setVoiceError('Voice transcription is not available in this browser. Try Chrome or Safari.');
+      return;
+    }
+    stopVoiceTranscription();
+    const recognition = new SpeechRecognition();
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    recognition.maxAlternatives = 1;
+    const language = voiceLanguage.trim();
+    if (language) {
+      recognition.lang = language;
+    }
+    recognition.onresult = (event) => {
+      const finalSegments: string[] = [];
+      const interimSegments: string[] = [];
+      for (let index = event.resultIndex; index < event.results.length; index += 1) {
+        const result = event.results[index];
+        const transcript = result?.[0]?.transcript.trim();
+        if (!result || !transcript) {
+          continue;
+        }
+        if (result.isFinal) {
+          finalSegments.push(transcript);
+        } else {
+          interimSegments.push(transcript);
+        }
+      }
+      if (finalSegments.length > 0) {
+        setVoiceTranscript((current) => appendTranscript(current, finalSegments.join(' ')));
+        setVoiceEnglishTranscript('');
+      }
+      setVoiceInterimTranscript(interimSegments.join(' '));
+    };
+    recognition.onerror = (event) => {
+      setVoiceError(speechRecognitionErrorMessage(event));
+      setVoiceStatus('');
+    };
+    recognition.onend = () => {
+      setVoiceListening(false);
+      setVoiceInterimTranscript('');
+      speechRecognitionRef.current = null;
+      setVoiceStatus((current) => (current === 'Listening. Speak naturally in any browser-supported language.' ? '' : current));
+    };
+    speechRecognitionRef.current = recognition;
     try {
-      const capture = captureCameraFrame();
-      applyCapturedImage(capture);
-      await analyzeCareNeed(capture);
+      recognition.start();
+      setVoiceListening(true);
+      setVoiceStatus('Listening. Speak naturally in any browser-supported language.');
     } catch (requestError) {
-      setAnalysisError(errorMessage(requestError));
+      speechRecognitionRef.current = null;
+      setVoiceListening(false);
+      setVoiceError(errorMessage(requestError));
     }
   }
 
-  async function analyzeCareNeed(imageOverride?: CapturedImage) {
-    const activeImageDataUrl = imageOverride?.dataUrl ?? imageDataUrl;
-    const activeImageName = imageOverride?.name ?? imageName;
-    const activeMimeType = imageOverride?.mimeType ?? mimeType;
+  function stopVoiceTranscription() {
+    const recognition = speechRecognitionRef.current;
+    if (!recognition) {
+      setVoiceListening(false);
+      return;
+    }
+    recognition.stop();
+  }
+
+  function clearVoiceTranscript() {
+    setVoiceTranscript('');
+    setVoiceEnglishTranscript('');
+    setVoiceInterimTranscript('');
+    setVoiceError('');
+    setVoiceStatus('');
+  }
+
+  function selectSearchMode(mode: SearchMode) {
+    setSearchMode(mode);
+    setAnalysisError('');
+    setAnalysisStatus('');
+    if (mode !== 'image') {
+      stopCamera();
+    }
+    if (mode !== 'voice') {
+      stopVoiceTranscription();
+    }
+  }
+
+  async function translateVoiceToEnglish() {
+    const transcript = voiceTranscript.trim();
+    if (!transcript) {
+      setVoiceError('Record or enter the original-language transcript before translating.');
+      return;
+    }
+    setVoiceError('');
+    setVoiceStatus('');
+    setVoiceTranslationLoading(true);
+    try {
+      const result = await postJson<TranslationResponse>('/api/care-finder/translate', {
+        text: transcript,
+        sourceLanguage: voiceLanguage,
+      });
+      setVoiceEnglishTranscript(result.englishTranslation);
+      setVoiceStatus(`English translation ready${result.sourceLanguage ? ` from ${result.sourceLanguage}` : ''}.`);
+    } catch (requestError) {
+      setVoiceError(errorMessage(requestError));
+    } finally {
+      setVoiceTranslationLoading(false);
+    }
+  }
+
+  async function findCareFromSelectedMode() {
+    setError('');
+    setAnalysisError('');
+    if (searchMode === 'image' && cameraActive) {
+      try {
+        const capture = captureCameraFrame();
+        applyCapturedImage(capture);
+        await analyzeCareNeed({ imageOverride: capture, modeOverride: 'image' });
+      } catch (requestError) {
+        setAnalysisError(errorMessage(requestError));
+      }
+      return;
+    }
+    await analyzeCareNeed({ modeOverride: searchMode });
+  }
+
+  async function analyzeCareNeed(options?: { imageOverride?: CapturedImage; modeOverride?: SearchMode }) {
+    const activeMode = options?.modeOverride ?? searchMode;
+    const activeImageDataUrl = activeMode === 'image' ? (options?.imageOverride?.dataUrl ?? imageDataUrl) : '';
+    const activeImageName = options?.imageOverride?.name ?? imageName;
+    const activeMimeType = options?.imageOverride?.mimeType ?? mimeType;
     const hasActiveImageInput = activeImageDataUrl.length > 0;
-    if (!hasActiveImageInput && !hasCaseContextInput) {
-      setAnalysisError('Upload an image, scan a camera frame, or enter symptoms/case context before searching.');
+    const activeAddressOrNotes = activeMode === 'image' ? '' : userAddressOrNotes;
+    const activeSearchSymptoms = buildSearchSymptoms(
+      activeMode === 'case' ? userSymptoms : '',
+      activeMode === 'voice' ? voiceTranscript : '',
+      activeMode === 'voice' ? voiceEnglishTranscript : ''
+    );
+    const hasActiveModeInput =
+      activeMode === 'image'
+        ? hasActiveImageInput
+        : activeMode === 'voice'
+          ? activeSearchSymptoms.trim().length > 0
+          : activeSearchSymptoms.trim().length > 0 || activeAddressOrNotes.trim().length > 0;
+    if (!hasActiveModeInput) {
+      setAnalysisError(missingSearchInputMessage);
       return;
     }
     let slowRequestTimer: number | undefined;
     setLoading(true);
     setError('');
     setAnalysisError('');
-    setAnalysisStatus(hasActiveImageInput ? 'Starting image and case analysis...' : 'Starting case-context analysis...');
+    setAnalysisStatus(activeMode === 'image' ? 'Starting image analysis...' : 'Starting case-context analysis...');
     setAnalysis(null);
     try {
       slowRequestTimer = window.setTimeout(() => {
@@ -380,8 +606,8 @@ export function CareFinderPage() {
         userLat,
         userLon,
         userLocationText: locationText,
-        userAddressOrNotes,
-        userSymptoms,
+        userAddressOrNotes: activeAddressOrNotes,
+        userSymptoms: activeSearchSymptoms,
         userName,
         appointmentPreference,
         settings: {
@@ -412,8 +638,8 @@ export function CareFinderPage() {
           <div>
             <h2 className="text-xl font-semibold">Care Finder Vision</h2>
             <p className="mt-1 max-w-3xl text-sm text-muted-foreground">
-              Upload an image or describe the case context to collect non-diagnostic care-routing observations and rank
-              nearby facilities.
+              Upload an image, scan a camera frame, or describe the case context with text or voice to collect
+              non-diagnostic care-routing observations and rank nearby facilities.
             </p>
           </div>
           <div className="grid gap-1 text-xs text-muted-foreground md:text-right">
@@ -482,141 +708,6 @@ export function CareFinderPage() {
             ) : null}
           </section>
 
-          <section className="rounded-md border border-border bg-card p-4">
-            <h3 className="mb-3 font-semibold">Case context</h3>
-            <div className="grid gap-3">
-              <label className="grid gap-1 text-sm">
-                Address / landmark / location notes
-                <input
-                  className="h-10 rounded-md border border-input bg-background px-3"
-                  value={userAddressOrNotes}
-                  onChange={(event) => setUserAddressOrNotes(event.target.value)}
-                  placeholder="near VS Hospital, Paldi"
-                />
-              </label>
-              <label className="grid gap-1 text-sm">
-                Symptoms or case context
-                <textarea
-                  className="min-h-24 rounded-md border border-input bg-background px-3 py-2"
-                  value={userSymptoms}
-                  onChange={(event) => setUserSymptoms(event.target.value)}
-                  placeholder="child has swelling after fall; rash on arm; eye redness; wound on leg"
-                />
-                <span className="text-xs text-muted-foreground">Required when no image is uploaded.</span>
-              </label>
-              <div className="grid gap-3 md:grid-cols-2">
-                <label className="grid gap-1 text-sm">
-                  Optional patient/name for WhatsApp
-                  <input
-                    className="h-10 rounded-md border border-input bg-background px-3"
-                    value={userName}
-                    onChange={(event) => setUserName(event.target.value)}
-                    placeholder="Rahul Shah"
-                  />
-                </label>
-                <label className="grid gap-1 text-sm">
-                  Optional preferred appointment time
-                  <input
-                    className="h-10 rounded-md border border-input bg-background px-3"
-                    value={appointmentPreference}
-                    onChange={(event) => setAppointmentPreference(event.target.value)}
-                    placeholder="today after 5 PM"
-                  />
-                </label>
-              </div>
-            </div>
-          </section>
-
-          <section className="rounded-md border border-border bg-card p-4">
-            <div className="mb-3 flex items-center gap-2">
-              <Upload className="h-4 w-4" />
-              <h3 className="font-semibold">Image or case-context search</h3>
-            </div>
-            <p className="mb-3 text-sm text-muted-foreground">
-              Upload an image, scan a live camera frame, or leave it blank and use the case context above.
-            </p>
-            <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_auto]">
-              <input
-                className="block w-full rounded-md border border-input bg-background p-2 text-sm"
-                type="file"
-                accept="image/jpeg,image/png,image/webp"
-                onChange={(event) => void handleImageFile(event.target.files?.[0] ?? null)}
-              />
-              <Button
-                type="button"
-                variant={cameraActive ? 'secondary' : 'outline'}
-                onClick={() => {
-                  if (cameraActive) {
-                    stopCamera();
-                    return;
-                  }
-                  void startCamera();
-                }}
-                disabled={cameraLoading}
-              >
-                {cameraLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Camera className="h-4 w-4" />}
-                {cameraActive ? 'Stop camera' : 'Start camera'}
-              </Button>
-            </div>
-            {cameraActive ? (
-              <div className="mt-4 space-y-3 rounded-md border border-border bg-muted/30 p-3">
-                <video
-                  ref={videoRef}
-                  className="aspect-video w-full rounded-md border bg-background object-cover"
-                  muted
-                  playsInline
-                  autoPlay
-                  aria-label="Live camera preview for care finder image search"
-                />
-                <div className="flex flex-wrap gap-2">
-                  <Button type="button" onClick={() => void scanCameraFrame()} disabled={loading || cameraLoading}>
-                    {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Camera className="h-4 w-4" />}
-                    {loading ? 'Scanning...' : 'Scan current frame'}
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    onClick={() => captureCameraImage()}
-                    disabled={loading || cameraLoading}
-                  >
-                    Capture frame only
-                  </Button>
-                </div>
-                <p className="text-xs text-muted-foreground">
-                  Camera mode shows a live preview. Only the frame you capture or scan is sent for care matching.
-                </p>
-              </div>
-            ) : null}
-            {imageDataUrl ? (
-              <div className="mt-4 grid gap-4 md:grid-cols-[240px_minmax(0,1fr)]">
-                <img
-                  src={imageDataUrl}
-                  alt={imageName}
-                  className="aspect-square w-full rounded-md border object-cover"
-                />
-                <div className="space-y-3">
-                  <div className="text-sm">
-                    <div className="font-medium">{imageName}</div>
-                    <div className="text-muted-foreground">{mimeType}</div>
-                  </div>
-                </div>
-              </div>
-            ) : null}
-            <div className="mt-4 space-y-3">
-              <Button type="button" onClick={() => void analyzeCareNeed()} disabled={loading || !canAnalyze}>
-                {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-                {loading ? 'Finding care...' : analyzeButtonLabel}
-              </Button>
-              {!canAnalyze ? (
-                <p className="text-xs text-muted-foreground">
-                  Upload an image, scan a camera frame, or enter symptoms/case context above.
-                </p>
-              ) : null}
-              {analysisStatus ? <StatusMessage tone="info" message={analysisStatus} /> : null}
-              {analysisError ? <StatusMessage tone="error" message={analysisError} /> : null}
-            </div>
-          </section>
-
           {analysis ? (
             <section className="space-y-5">
               <StatusMessage
@@ -666,7 +757,250 @@ export function CareFinderPage() {
           ) : null}
         </div>
 
-        <aside className="space-y-5">
+        <aside className="space-y-5 xl:sticky xl:top-4 xl:self-start">
+          <section className="rounded-md border border-border bg-card p-4">
+            <div className="mb-4">
+              <h3 className="font-semibold">Find care</h3>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Choose one search type, fill in the panel below, then use the shared Find care button.
+              </p>
+            </div>
+
+            <div className="grid gap-2" role="radiogroup" aria-label="Care search type">
+              <SearchModeOption
+                active={searchMode === 'case'}
+                icon={<FileText className="h-4 w-4" />}
+                title="Case search"
+                description="Type symptoms or case notes."
+                onClick={() => selectSearchMode('case')}
+              />
+              <SearchModeOption
+                active={searchMode === 'image'}
+                icon={<Upload className="h-4 w-4" />}
+                title="Image search"
+                description="Upload an image or use live camera."
+                onClick={() => selectSearchMode('image')}
+              />
+              <SearchModeOption
+                active={searchMode === 'voice'}
+                icon={<Mic className="h-4 w-4" />}
+                title="Voice search"
+                description="Speak in any supported language."
+                onClick={() => selectSearchMode('voice')}
+              />
+            </div>
+
+            <div className="mt-4 rounded-md border border-border bg-muted/30 p-3">
+              <div className="mb-3">
+                <h4 className="font-medium">{selectedSearchTitle}</h4>
+                <p className="text-xs text-muted-foreground">{selectedSearchHelp}</p>
+              </div>
+
+              {searchMode === 'case' ? (
+                <div className="grid gap-3">
+                  <label className="grid gap-1 text-sm">
+                    Address / landmark / location notes
+                    <input
+                      className="h-10 rounded-md border border-input bg-background px-3"
+                      value={userAddressOrNotes}
+                      onChange={(event) => setUserAddressOrNotes(event.target.value)}
+                      placeholder="near VS Hospital, Paldi"
+                    />
+                  </label>
+                  <label className="grid gap-1 text-sm">
+                    Symptoms or case context
+                    <textarea
+                      className="min-h-28 rounded-md border border-input bg-background px-3 py-2"
+                      value={userSymptoms}
+                      onChange={(event) => setUserSymptoms(event.target.value)}
+                      placeholder="child has swelling after fall; rash on arm; eye redness; wound on leg"
+                    />
+                  </label>
+                </div>
+              ) : null}
+
+              {searchMode === 'image' ? (
+                <div className="grid gap-3">
+                  <input
+                    className="block w-full rounded-md border border-input bg-background p-2 text-sm"
+                    type="file"
+                    accept="image/jpeg,image/png,image/webp"
+                    onChange={(event) => void handleImageFile(event.target.files?.[0] ?? null)}
+                  />
+                  <Button
+                    type="button"
+                    variant={cameraActive ? 'secondary' : 'outline'}
+                    onClick={() => {
+                      if (cameraActive) {
+                        stopCamera();
+                        return;
+                      }
+                      void startCamera();
+                    }}
+                    disabled={cameraLoading}
+                  >
+                    {cameraLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Camera className="h-4 w-4" />}
+                    {cameraActive ? 'Stop camera' : 'Start camera'}
+                  </Button>
+                  {cameraActive ? (
+                    <div className="space-y-3">
+                      <video
+                        ref={videoRef}
+                        className="aspect-video w-full rounded-md border bg-background object-cover"
+                        muted
+                        playsInline
+                        autoPlay
+                        aria-label="Live camera preview for care finder image search"
+                      />
+                      <div className="flex flex-wrap gap-2">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          onClick={() => captureCameraImage()}
+                          disabled={loading || cameraLoading}
+                        >
+                          Capture frame
+                        </Button>
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        Find care will scan the live camera frame if the camera is running.
+                      </p>
+                    </div>
+                  ) : null}
+                  {imageDataUrl ? (
+                    <div className="grid gap-3">
+                      <img
+                        src={imageDataUrl}
+                        alt={imageName}
+                        className="aspect-square w-full rounded-md border object-cover"
+                      />
+                      <div className="text-sm">
+                        <div className="font-medium">{imageName}</div>
+                        <div className="text-muted-foreground">{mimeType}</div>
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+
+              {searchMode === 'voice' ? (
+                <div className="grid gap-3">
+                  <label className="grid gap-1 text-sm">
+                    Voice language
+                    <input
+                      className="h-10 rounded-md border border-input bg-background px-3"
+                      list={voiceLanguageListId}
+                      value={voiceLanguage}
+                      onChange={(event) => setVoiceLanguage(event.target.value)}
+                      placeholder="Browser default / auto; e.g. gu-IN, hi-IN, es-ES"
+                    />
+                    <datalist id={voiceLanguageListId}>
+                      {voiceLanguageOptions.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </datalist>
+                  </label>
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      type="button"
+                      variant={voiceListening ? 'secondary' : 'outline'}
+                      onClick={() => {
+                        if (voiceListening) {
+                          stopVoiceTranscription();
+                          return;
+                        }
+                        startVoiceTranscription();
+                      }}
+                      disabled={!supportsVoiceInput}
+                    >
+                      <Mic className="h-4 w-4" />
+                      {voiceListening ? 'Stop voice' : 'Start voice'}
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => clearVoiceTranscript()}
+                      disabled={!hasVoiceTranscript && !voiceInterimTranscript}
+                    >
+                      Clear
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => void translateVoiceToEnglish()}
+                      disabled={voiceTranslationLoading || !hasOriginalVoiceTranscript}
+                    >
+                      {voiceTranslationLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                      {voiceTranslationLoading ? 'Translating...' : 'Translate'}
+                    </Button>
+                  </div>
+                  <label className="grid gap-1 text-sm">
+                    Voice transcript (original language)
+                    <textarea
+                      className="min-h-28 rounded-md border border-input bg-background px-3 py-2"
+                      value={voiceTranscript}
+                      onChange={(event) => setVoiceTranscript(event.target.value)}
+                      placeholder="Start voice input, then edit the original-language transcript here."
+                    />
+                  </label>
+                  <label className="grid gap-1 text-sm">
+                    English translation
+                    <textarea
+                      className="min-h-28 rounded-md border border-input bg-background px-3 py-2"
+                      value={voiceEnglishTranscript}
+                      onChange={(event) => setVoiceEnglishTranscript(event.target.value)}
+                      placeholder="Translate to English, or type/edit the English version here."
+                    />
+                  </label>
+                  {voiceInterimTranscript ? (
+                    <div className="rounded-md border border-border bg-background p-3 text-sm">
+                      <div className="text-xs font-medium uppercase text-muted-foreground">Listening preview</div>
+                      <div>{voiceInterimTranscript}</div>
+                    </div>
+                  ) : null}
+                  {!supportsVoiceInput ? (
+                    <p className="text-xs text-muted-foreground">
+                      Voice transcription requires browser speech recognition support. You can still type or paste a
+                      transcript above.
+                    </p>
+                  ) : null}
+                  {voiceStatus ? <StatusMessage tone="info" message={voiceStatus} /> : null}
+                  {voiceError ? <StatusMessage tone="error" message={voiceError} /> : null}
+                </div>
+              ) : null}
+            </div>
+
+            <div className="mt-4 grid gap-3 border-t border-border pt-4">
+              <label className="grid gap-1 text-sm">
+                Optional patient/name for WhatsApp
+                <input
+                  className="h-10 rounded-md border border-input bg-background px-3"
+                  value={userName}
+                  onChange={(event) => setUserName(event.target.value)}
+                  placeholder="Rahul Shah"
+                />
+              </label>
+              <label className="grid gap-1 text-sm">
+                Optional preferred appointment time
+                <input
+                  className="h-10 rounded-md border border-input bg-background px-3"
+                  value={appointmentPreference}
+                  onChange={(event) => setAppointmentPreference(event.target.value)}
+                  placeholder="today after 5 PM"
+                />
+              </label>
+              <Button type="button" onClick={() => void findCareFromSelectedMode()} disabled={loading || !canAnalyze}>
+                {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                {loading ? 'Finding care...' : 'Find care'}
+              </Button>
+              {!canAnalyze ? <p className="text-xs text-muted-foreground">{missingSearchInputMessage}</p> : null}
+              {analysisStatus ? <StatusMessage tone="info" message={analysisStatus} /> : null}
+              {analysisError ? <StatusMessage tone="error" message={analysisError} /> : null}
+            </div>
+          </section>
+
           <section className="rounded-md border border-border bg-card p-4">
             <h3 className="mb-3 font-semibold">Recommendation settings</h3>
             <div className="grid gap-3">
@@ -712,6 +1046,40 @@ export function CareFinderPage() {
         </aside>
       </div>
     </div>
+  );
+}
+
+function SearchModeOption({
+  active,
+  icon,
+  title,
+  description,
+  onClick,
+}: {
+  active: boolean;
+  icon: ReactNode;
+  title: string;
+  description: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      role="radio"
+      aria-checked={active}
+      className={`rounded-md border p-3 text-left transition-colors ${
+        active ? 'border-primary bg-primary/10' : 'border-border bg-background hover:bg-muted'
+      }`}
+      onClick={onClick}
+    >
+      <span className="flex items-start gap-3">
+        <span className="mt-0.5">{icon}</span>
+        <span>
+          <span className="block text-sm font-medium">{title}</span>
+          <span className="block text-xs text-muted-foreground">{description}</span>
+        </span>
+      </span>
+    </button>
   );
 }
 
@@ -982,6 +1350,55 @@ function dataUrlByteLength(dataUrl: string): number {
   const base64 = commaIndex >= 0 ? dataUrl.slice(commaIndex + 1) : dataUrl;
   const padding = base64.endsWith('==') ? 2 : base64.endsWith('=') ? 1 : 0;
   return Math.floor((base64.length * 3) / 4) - padding;
+}
+
+function getSpeechRecognitionConstructor(): SpeechRecognitionConstructor | null {
+  if (typeof window === 'undefined') {
+    return null;
+  }
+  const speechWindow = window as Window & {
+    SpeechRecognition?: SpeechRecognitionConstructor;
+    webkitSpeechRecognition?: SpeechRecognitionConstructor;
+  };
+  return speechWindow.SpeechRecognition ?? speechWindow.webkitSpeechRecognition ?? null;
+}
+
+function abortSpeechRecognition(recognition: BrowserSpeechRecognition | null) {
+  if (!recognition) {
+    return;
+  }
+  recognition.abort();
+}
+
+function appendTranscript(current: string, next: string): string {
+  const normalizedNext = next.trim();
+  if (!normalizedNext) {
+    return current;
+  }
+  const normalizedCurrent = current.trim();
+  return normalizedCurrent ? `${normalizedCurrent} ${normalizedNext}` : normalizedNext;
+}
+
+function buildSearchSymptoms(typedContext: string, originalVoiceContext: string, englishVoiceContext: string): string {
+  const parts = [
+    typedContext.trim(),
+    originalVoiceContext.trim() ? `Voice transcript (original language): ${originalVoiceContext.trim()}` : '',
+    englishVoiceContext.trim() ? `Voice transcript (English translation): ${englishVoiceContext.trim()}` : '',
+  ].filter(Boolean);
+  return parts.join('\n\n');
+}
+
+function speechRecognitionErrorMessage(event: SpeechRecognitionErrorEventLike): string {
+  if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
+    return 'Microphone permission was denied. Allow microphone access and try again.';
+  }
+  if (event.error === 'no-speech') {
+    return 'No speech was detected. Try again and speak clearly into the microphone.';
+  }
+  if (event.message) {
+    return event.message;
+  }
+  return event.error ? `Voice transcription failed: ${event.error}` : 'Voice transcription failed.';
 }
 
 function errorMessage(error: unknown): string {
