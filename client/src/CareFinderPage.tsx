@@ -227,12 +227,10 @@ export function CareFinderPage() {
   const redFlags = useMemo(() => stringsFromUnknown(analysis?.parsed?.red_flags), [analysis]);
   const hasImageInput = imageDataUrl.length > 0;
   const supportsVoiceInput = getSpeechRecognitionConstructor() !== null;
-  const searchSymptoms = buildSearchSymptoms(userSymptoms, voiceTranscript, voiceEnglishTranscript);
   const hasOriginalVoiceTranscript = voiceTranscript.trim().length > 0;
   const hasVoiceTranscript = hasOriginalVoiceTranscript || voiceEnglishTranscript.trim().length > 0;
   const hasTypedCaseContext = userSymptoms.trim().length > 0 || userAddressOrNotes.trim().length > 0;
   const hasImageSearchInput = hasImageInput || cameraActive;
-  const hasCaseContextInput = searchSymptoms.trim().length > 0 || userAddressOrNotes.trim().length > 0;
   const canAnalyze =
     searchMode === 'case' ? hasTypedCaseContext : searchMode === 'image' ? hasImageSearchInput : hasVoiceTranscript;
   const selectedSearchTitle =
