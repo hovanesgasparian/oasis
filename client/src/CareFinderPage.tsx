@@ -1,9 +1,10 @@
 import type { ReactNode } from 'react';
-import { useEffect, useId, useMemo, useState } from 'react';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { Button } from '@databricks/appkit-ui/react';
 import {
   AlertTriangle,
   CalendarCheck,
+  Camera,
   ChevronDown,
   ChevronRight,
   Loader2,
@@ -65,6 +66,12 @@ type AnalysisResult = {
   writeWarning?: string;
 };
 
+type CapturedImage = {
+  name: string;
+  mimeType: string;
+  dataUrl: string;
+};
+
 const newPatientsOptions = ['Any', 'Only facilities taking new patients', 'Only facilities with unknown status'];
 
 const insuranceOptions = ['Any', 'Insurance accepted/mentioned', 'Self-pay/cash accepted/mentioned', 'Unknown'];
@@ -85,6 +92,8 @@ const recommendationColumns = [
 ];
 
 export function CareFinderPage() {
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const cameraStreamRef = useRef<MediaStream | null>(null);
   const [config, setConfig] = useState<CareFinderConfig | null>(null);
   const [locationText, setLocationText] = useState('Ahmedabad, Gujarat');
   const [userLat, setUserLat] = useState(23.0225);
@@ -103,6 +112,8 @@ export function CareFinderPage() {
   const [imageName, setImageName] = useState('');
   const [mimeType, setMimeType] = useState('');
   const [imageDataUrl, setImageDataUrl] = useState('');
+  const [cameraActive, setCameraActive] = useState(false);
+  const [cameraLoading, setCameraLoading] = useState(false);
   const [analysis, setAnalysis] = useState<AnalysisResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [locationLoading, setLocationLoading] = useState(false);
@@ -113,6 +124,25 @@ export function CareFinderPage() {
   useEffect(() => {
     void loadConfig();
   }, []);
+
+  useEffect(() => {
+    return () => {
+      stopMediaStream(cameraStreamRef.current);
+      cameraStreamRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    const stream = cameraStreamRef.current;
+    if (!cameraActive || !video || !stream) {
+      return;
+    }
+    video.srcObject = stream;
+    void video.play().catch((requestError: unknown) => {
+      setAnalysisError(errorMessage(requestError));
+    });
+  }, [cameraActive]);
 
   const urgency = stringFromUnknown(analysis?.parsed?.urgency_level, 'unclear').toLowerCase();
   const redFlags = useMemo(() => stringsFromUnknown(analysis?.parsed?.red_flags), [analysis]);
@@ -206,6 +236,7 @@ export function CareFinderPage() {
       setImageDataUrl('');
       return;
     }
+    stopCamera();
     if (file.size > 8 * 1024 * 1024) {
       setAnalysisError('Choose an image under 8 MB.');
       return;
@@ -220,16 +251,121 @@ export function CareFinderPage() {
     }
   }
 
-  async function analyzeCareNeed() {
-    if (!canAnalyze) {
-      setAnalysisError('Upload an image or enter symptoms/case context before searching.');
+  async function startCamera() {
+    setError('');
+    setAnalysisError('');
+    setAnalysisStatus('');
+    setCameraLoading(true);
+    try {
+      if (!navigator.mediaDevices?.getUserMedia) {
+        throw new Error('Camera capture is not available in this browser.');
+      }
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: false,
+        video: {
+          facingMode: { ideal: 'environment' },
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+        },
+      });
+      stopMediaStream(cameraStreamRef.current);
+      cameraStreamRef.current = stream;
+      setCameraActive(true);
+      setAnalysisStatus('Camera is live. Position the subject, then scan the current frame.');
+    } catch (requestError) {
+      cameraStreamRef.current = null;
+      setCameraActive(false);
+      setAnalysisError(errorMessage(requestError));
+    } finally {
+      setCameraLoading(false);
+    }
+  }
+
+  function stopCamera() {
+    stopMediaStream(cameraStreamRef.current);
+    cameraStreamRef.current = null;
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+    }
+    setCameraActive(false);
+    setCameraLoading(false);
+  }
+
+  function captureCameraFrame(): CapturedImage {
+    const video = videoRef.current;
+    if (!cameraActive || !video || !cameraStreamRef.current) {
+      throw new Error('Start the camera before scanning a frame.');
+    }
+    const sourceWidth = video.videoWidth;
+    const sourceHeight = video.videoHeight;
+    if (!sourceWidth || !sourceHeight) {
+      throw new Error('Camera is still warming up. Try again in a moment.');
+    }
+    const maxDimension = 1280;
+    const scale = Math.min(1, maxDimension / Math.max(sourceWidth, sourceHeight));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(sourceWidth * scale));
+    canvas.height = Math.max(1, Math.round(sourceHeight * scale));
+    const context = canvas.getContext('2d');
+    if (!context) {
+      throw new Error('Could not prepare the camera frame for scanning.');
+    }
+    context.drawImage(video, 0, 0, canvas.width, canvas.height);
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.9);
+    if (dataUrlByteLength(dataUrl) > 8 * 1024 * 1024) {
+      throw new Error('Camera frame is too large. Move closer or try again.');
+    }
+    return {
+      name: `camera frame ${new Date().toLocaleTimeString()}`,
+      mimeType: 'image/jpeg',
+      dataUrl,
+    };
+  }
+
+  function applyCapturedImage(capture: CapturedImage) {
+    setImageName(capture.name);
+    setMimeType(capture.mimeType);
+    setImageDataUrl(capture.dataUrl);
+  }
+
+  function captureCameraImage() {
+    setError('');
+    setAnalysisError('');
+    setAnalysisStatus('');
+    setAnalysis(null);
+    try {
+      applyCapturedImage(captureCameraFrame());
+    } catch (requestError) {
+      setAnalysisError(errorMessage(requestError));
+    }
+  }
+
+  async function scanCameraFrame() {
+    setError('');
+    setAnalysisError('');
+    try {
+      const capture = captureCameraFrame();
+      applyCapturedImage(capture);
+      await analyzeCareNeed(capture);
+    } catch (requestError) {
+      setAnalysisError(errorMessage(requestError));
+    }
+  }
+
+  async function analyzeCareNeed(imageOverride?: CapturedImage) {
+    const activeImageDataUrl = imageOverride?.dataUrl ?? imageDataUrl;
+    const activeImageName = imageOverride?.name ?? imageName;
+    const activeMimeType = imageOverride?.mimeType ?? mimeType;
+    const hasActiveImageInput = activeImageDataUrl.length > 0;
+    if (!hasActiveImageInput && !hasCaseContextInput) {
+      setAnalysisError('Upload an image, scan a camera frame, or enter symptoms/case context before searching.');
       return;
     }
     let slowRequestTimer: number | undefined;
     setLoading(true);
     setError('');
     setAnalysisError('');
-    setAnalysisStatus(hasImageInput ? 'Starting image and case analysis...' : 'Starting case-context analysis...');
+    setAnalysisStatus(hasActiveImageInput ? 'Starting image and case analysis...' : 'Starting case-context analysis...');
     setAnalysis(null);
     try {
       slowRequestTimer = window.setTimeout(() => {
@@ -238,9 +374,9 @@ export function CareFinderPage() {
         );
       }, 2500);
       const result = await postJson<AnalysisResult>('/api/care-finder/analyze', {
-        imageName: imageName || (hasImageInput ? 'uploaded image' : 'case context'),
-        imageDataUrl: hasImageInput ? imageDataUrl : '',
-        mimeType: hasImageInput ? mimeType : '',
+        imageName: activeImageName || (hasActiveImageInput ? 'uploaded image' : 'case context'),
+        imageDataUrl: hasActiveImageInput ? activeImageDataUrl : '',
+        mimeType: hasActiveImageInput ? activeMimeType : '',
         userLat,
         userLon,
         userLocationText: locationText,
@@ -397,14 +533,60 @@ export function CareFinderPage() {
               <h3 className="font-semibold">Image or case-context search</h3>
             </div>
             <p className="mb-3 text-sm text-muted-foreground">
-              Upload an image, or leave it blank and use the case context above.
+              Upload an image, scan a live camera frame, or leave it blank and use the case context above.
             </p>
-            <input
-              className="block w-full rounded-md border border-input bg-background p-2 text-sm"
-              type="file"
-              accept="image/jpeg,image/png,image/webp"
-              onChange={(event) => void handleImageFile(event.target.files?.[0] ?? null)}
-            />
+            <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_auto]">
+              <input
+                className="block w-full rounded-md border border-input bg-background p-2 text-sm"
+                type="file"
+                accept="image/jpeg,image/png,image/webp"
+                onChange={(event) => void handleImageFile(event.target.files?.[0] ?? null)}
+              />
+              <Button
+                type="button"
+                variant={cameraActive ? 'secondary' : 'outline'}
+                onClick={() => {
+                  if (cameraActive) {
+                    stopCamera();
+                    return;
+                  }
+                  void startCamera();
+                }}
+                disabled={cameraLoading}
+              >
+                {cameraLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Camera className="h-4 w-4" />}
+                {cameraActive ? 'Stop camera' : 'Start camera'}
+              </Button>
+            </div>
+            {cameraActive ? (
+              <div className="mt-4 space-y-3 rounded-md border border-border bg-muted/30 p-3">
+                <video
+                  ref={videoRef}
+                  className="aspect-video w-full rounded-md border bg-background object-cover"
+                  muted
+                  playsInline
+                  autoPlay
+                  aria-label="Live camera preview for care finder image search"
+                />
+                <div className="flex flex-wrap gap-2">
+                  <Button type="button" onClick={() => void scanCameraFrame()} disabled={loading || cameraLoading}>
+                    {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Camera className="h-4 w-4" />}
+                    {loading ? 'Scanning...' : 'Scan current frame'}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => captureCameraImage()}
+                    disabled={loading || cameraLoading}
+                  >
+                    Capture frame only
+                  </Button>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Camera mode shows a live preview. Only the frame you capture or scan is sent for care matching.
+                </p>
+              </div>
+            ) : null}
             {imageDataUrl ? (
               <div className="mt-4 grid gap-4 md:grid-cols-[240px_minmax(0,1fr)]">
                 <img
@@ -426,7 +608,9 @@ export function CareFinderPage() {
                 {loading ? 'Finding care...' : analyzeButtonLabel}
               </Button>
               {!canAnalyze ? (
-                <p className="text-xs text-muted-foreground">Upload an image or enter symptoms/case context above.</p>
+                <p className="text-xs text-muted-foreground">
+                  Upload an image, scan a camera frame, or enter symptoms/case context above.
+                </p>
               ) : null}
               {analysisStatus ? <StatusMessage tone="info" message={analysisStatus} /> : null}
               {analysisError ? <StatusMessage tone="error" message={analysisError} /> : null}
@@ -784,6 +968,20 @@ function readFileAsDataUrl(file: File): Promise<string> {
     reader.onerror = () => reject(new Error('Could not read image file.'));
     reader.readAsDataURL(file);
   });
+}
+
+function stopMediaStream(stream: MediaStream | null) {
+  if (!stream) {
+    return;
+  }
+  stream.getTracks().forEach((track) => track.stop());
+}
+
+function dataUrlByteLength(dataUrl: string): number {
+  const commaIndex = dataUrl.indexOf(',');
+  const base64 = commaIndex >= 0 ? dataUrl.slice(commaIndex + 1) : dataUrl;
+  const padding = base64.endsWith('==') ? 2 : base64.endsWith('=') ? 1 : 0;
+  return Math.floor((base64.length * 3) / 4) - padding;
 }
 
 function errorMessage(error: unknown): string {
