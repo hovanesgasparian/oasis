@@ -1,8 +1,9 @@
 # oasis
 
-A Databricks App powered by [AppKit](https://www.databricks.com/devhub/docs/appkit/v0/), featuring React, TypeScript, and Tailwind CSS.
+A Databricks App powered by [AppKit](https://www.databricks.com/devhub/docs/appkit/v0/), featuring React, TypeScript, Tailwind CSS, a Genie Space tab, a Care Finder Vision tab, and an HTTP MCP endpoint.
 
 **Enabled plugins:**
+
 - **Server** -- Express HTTP server with static file serving and Vite dev mode
 
 ## Prerequisites
@@ -113,6 +114,23 @@ https://<app-url>/mcp
 
 For Databricks AI Gateway MCP discovery, deploy this route from an app whose name starts with `mcp-`, for example `mcp-geoapify-routing`. Keep `GEOAPIFY_API_KEY` in the app environment or a Databricks secret, not in tracked source files.
 
+### Care Finder Vision
+
+The Care Finder Vision tab is a Node/React port of the previous Streamlit workflow. The browser collects location, image, symptom, and WhatsApp appointment inputs; the Express server handles AI Gateway calls, Databricks SQL facility lookups, reranking, WhatsApp link generation, and Delta result writes.
+
+Set these values in `.env` for local development or in the Databricks App environment for deployment:
+
+```env
+DATABRICKS_TOKEN=your_databricks_token_for_ai_gateway
+DATABRICKS_WAREHOUSE_ID=1bd5a57a33ae6d7c
+VISION_MODEL_NAME=databricks-gemma-3-12b
+MATCH_MODEL_NAME=databricks-gemini-3-5-flash
+FACILITY_TABLE=databricks_virtue_foundation_dataset_dais_2026.virtue_foundation_dataset.facilities
+RESULTS_TABLE=workspace.default.camera_vision_results
+```
+
+The app uses the existing Databricks SDK authentication context for SQL statement execution and `DATABRICKS_TOKEN` for the AI Gateway-compatible chat completions calls. Keep the token in `.env` or Databricks secrets, never in tracked source.
+
 ### Build
 
 Build both client and server for production:
@@ -215,6 +233,6 @@ databricks bundle deploy -t prod
 ## Tech Stack
 
 - **Backend**: Node.js, Express
-- **Frontend**: React.js, TypeScript, Vite, Tailwind CSS, React Router
+- **Frontend**: React.js, TypeScript, Vite, Tailwind CSS
 - **UI Components**: Radix UI, shadcn/ui
 - **Databricks**: AppKit SDK

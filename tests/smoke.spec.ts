@@ -5,8 +5,7 @@ import { join } from 'node:path';
 // ── Templated configuration (resolved by `databricks apps init`) ────────────
 const APP_CONFIG = {
   name: 'oasis',
-  plugins: [
-  ],
+  plugins: [],
 } as const;
 
 interface PluginPage {
@@ -33,9 +32,7 @@ const PLUGIN_PAGES: Record<string, PluginPage> = {
   },
 };
 
-const enabledPages = Object.entries(PLUGIN_PAGES).filter(
-  ([key]) => APP_CONFIG.plugins.includes(key),
-);
+const enabledPages = Object.entries(PLUGIN_PAGES).filter(([key]) => APP_CONFIG.plugins.includes(key));
 
 // ── Tests ───────────────────────────────────────────────────────────────────
 
@@ -49,12 +46,14 @@ test('smoke test - app loads and displays home page', async ({ page }) => {
   await page.goto('/');
 
   await expect(page.getByRole('heading', { name: APP_CONFIG.name })).toBeVisible();
-  await expect(
-    page.getByRole('heading', { name: 'Welcome to your Databricks App' }),
-  ).toBeVisible();
-  await expect(page.getByText('Getting Started')).toBeVisible();
+  await expect(page.getByRole('tab', { name: 'Genie Space' })).toBeVisible();
+  await expect(page.getByRole('tab', { name: 'Care Finder Vision' })).toBeVisible();
+  await expect(page.getByTitle('Databricks Genie')).toBeVisible();
 
-  await expect(page.getByRole('link', { name: 'Home' })).toBeVisible();
+  await page.getByRole('tab', { name: 'Care Finder Vision' }).click();
+  await expect(page.getByRole('heading', { name: 'Care Finder Vision' })).toBeVisible();
+  await expect(page.getByText('Upload image')).toBeVisible();
+
   for (const [, plugin] of enabledPages) {
     await expect(page.getByRole('link', { name: plugin.navLabel })).toBeVisible();
   }
