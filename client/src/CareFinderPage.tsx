@@ -5,16 +5,21 @@ import {
   AlertTriangle,
   CalendarCheck,
   Camera,
+  Car,
   ChevronDown,
   ChevronRight,
   FileText,
+  Footprints,
   Loader2,
   LocateFixed,
   MapPin,
   MessageCircle,
   Mic,
+  Navigation,
   Upload,
 } from 'lucide-react';
+import L from 'leaflet';
+import 'leaflet/dist/leaflet.css';
 
 type JsonRecord = Record<string, unknown>;
 
@@ -75,6 +80,28 @@ type CapturedImage = {
 };
 
 type SearchMode = 'case' | 'image' | 'voice';
+
+type TravelMode = 'drive' | 'walk';
+
+type RouteGeometry = Array<[number, number]>;
+
+type RouteInfo = {
+  distanceKm: number | null;
+  durationMin: number | null;
+  instructions: string[];
+  geometry: RouteGeometry;
+};
+
+type MapFacility = {
+  index: number;
+  name: string;
+  address: string;
+  lat: number;
+  lon: number;
+  straightLineKm: number | null;
+};
+
+const EMPTY_ROUTE: RouteGeometry = [];
 
 type TranslationResponse = {
   sourceLanguage: string;
@@ -197,6 +224,12 @@ export function CareFinderPage() {
   const [error, setError] = useState('');
   const [analysisError, setAnalysisError] = useState('');
   const [analysisStatus, setAnalysisStatus] = useState('');
+  const [selectedFacilityIndex, setSelectedFacilityIndex] = useState(0);
+  const [travelMode, setTravelMode] = useState<TravelMode>('drive');
+  const [routeInfo, setRouteInfo] = useState<RouteInfo | null>(null);
+  const [routeLoading, setRouteLoading] = useState(false);
+  const [routeError, setRouteError] = useState('');
+  const mapSectionRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     void loadConfig();
@@ -225,6 +258,55 @@ export function CareFinderPage() {
 
   const urgency = stringFromUnknown(analysis?.parsed?.urgency_level, 'unclear').toLowerCase();
   const redFlags = useMemo(() => stringsFromUnknown(analysis?.parsed?.red_flags), [analysis]);
+  const mapFacilities = useMemo<MapFacility[]>(() => extractMapFacilities(analysis?.recommended ?? []), [analysis]);
+  const hasUserCoords = Number.isFinite(userLat) && Number.isFinite(userLon);
+  const selectedFacility = useMemo<MapFacility | null>(() => {
+    if (mapFacilities.length === 0) {
+      return null;
+    }
+    return mapFacilities.find((facility) => facility.index === selectedFacilityIndex) ?? mapFacilities[0];
+  }, [mapFacilities, selectedFacilityIndex]);
+
+  useEffect(() => {
+    setSelectedFacilityIndex(0);
+  }, [analysis]);
+
+  useEffect(() => {
+    if (!selectedFacility || !hasUserCoords) {
+      setRouteInfo(null);
+      setRouteError('');
+      setRouteLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setRouteLoading(true);
+    setRouteError('');
+    void fetchRouteViaMcp(
+      { lat: userLat, lon: userLon },
+      { lat: selectedFacility.lat, lon: selectedFacility.lon },
+      travelMode
+    )
+      .then((info) => {
+        if (!cancelled) {
+          setRouteInfo(info);
+        }
+      })
+      .catch((requestError: unknown) => {
+        if (!cancelled) {
+          setRouteInfo(null);
+          setRouteError(errorMessage(requestError));
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setRouteLoading(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedFacility, hasUserCoords, userLat, userLon, travelMode]);
+
   const hasImageInput = imageDataUrl.length > 0;
   const supportsVoiceInput = getSpeechRecognitionConstructor() !== null;
   const hasOriginalVoiceTranscript = voiceTranscript.trim().length > 0;
@@ -708,6 +790,103 @@ export function CareFinderPage() {
             ) : null}
           </section>
 
+          {hasUserCoords ? (
+            <section ref={mapSectionRef} className="rounded-2xl border border-border bg-card p-4 shadow-sm sm:p-5">
+              <div className="mb-3 flex items-center gap-2">
+                <Navigation className="h-4 w-4" />
+                <h3 className="font-semibold">Your location &amp; route</h3>
+              </div>
+              <p className="mb-3 text-sm text-muted-foreground">
+                {mapFacilities.length > 0
+                  ? 'Your position and the recommended facilities are shown below. Pick a facility to see the driving or walking route.'
+                  : 'Your current position is shown below. Run a search to map recommended facilities and routes.'}
+              </p>
+
+              {mapFacilities.length > 0 ? (
+                <div className="mb-3 grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
+                  <label className="grid gap-1 text-sm">
+                    Route to facility
+                    <select
+                      className="h-10 rounded-md border border-input bg-background px-3"
+                      value={selectedFacilityIndex}
+                      onChange={(event) => setSelectedFacilityIndex(Number(event.target.value))}
+                    >
+                      {mapFacilities.map((facility) => (
+                        <option key={`${facility.index}-${facility.name}`} value={facility.index}>
+                          {facility.index + 1}. {facility.name}
+                          {facility.straightLineKm != null ? ` (${facility.straightLineKm.toFixed(1)} km)` : ''}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <div className="flex gap-2">
+                    <TravelModeButton
+                      mode="drive"
+                      current={travelMode}
+                      onSelect={setTravelMode}
+                      icon={<Car className="h-4 w-4" />}
+                      label="Drive"
+                    />
+                    <TravelModeButton
+                      mode="walk"
+                      current={travelMode}
+                      onSelect={setTravelMode}
+                      icon={<Footprints className="h-4 w-4" />}
+                      label="Walk"
+                    />
+                  </div>
+                </div>
+              ) : null}
+
+              <RouteMap
+                user={{ lat: userLat, lon: userLon, label: detectedLocationLabel || locationText }}
+                facilities={mapFacilities}
+                selectedIndex={selectedFacilityIndex}
+                routeGeometry={routeInfo?.geometry ?? EMPTY_ROUTE}
+                onSelectFacility={setSelectedFacilityIndex}
+              />
+
+              {mapFacilities.length > 0 ? (
+                <div className="mt-3 space-y-3">
+                  {routeLoading ? (
+                    <p className="flex items-center gap-2 text-sm text-muted-foreground">
+                      <Loader2 className="h-4 w-4 animate-spin" /> Calculating{' '}
+                      {travelMode === 'walk' ? 'walking' : 'driving'} route...
+                    </p>
+                  ) : null}
+                  {routeError ? (
+                    <StatusMessage
+                      tone="warning"
+                      message={`Live routing is unavailable (${routeError}). Showing a direct line on the map instead.`}
+                    />
+                  ) : null}
+                  {selectedFacility ? (
+                    <div className="flex flex-wrap items-center gap-2 text-sm">
+                      <Badge>
+                        <Navigation className="mr-1 h-3 w-3" />
+                        {selectedFacility.index + 1}. {selectedFacility.name}
+                      </Badge>
+                      {routeInfo?.distanceKm != null ? <Badge>{routeInfo.distanceKm.toFixed(1)} km by road</Badge> : null}
+                      {routeInfo?.durationMin != null ? <Badge>{formatDuration(routeInfo.durationMin)}</Badge> : null}
+                    </div>
+                  ) : null}
+                  {routeInfo && routeInfo.instructions.length > 0 ? (
+                    <details className="rounded-xl border border-border bg-background p-3 text-sm">
+                      <summary className="cursor-pointer font-medium">
+                        Turn-by-turn directions ({routeInfo.instructions.length})
+                      </summary>
+                      <ol className="mt-2 list-decimal space-y-1 pl-5 text-muted-foreground">
+                        {routeInfo.instructions.map((instruction, index) => (
+                          <li key={`${index}-${instruction}`}>{instruction}</li>
+                        ))}
+                      </ol>
+                    </details>
+                  ) : null}
+                </div>
+              ) : null}
+            </section>
+          ) : null}
+
           {analysis ? (
             <section className="space-y-5">
               <StatusMessage
@@ -732,10 +911,15 @@ export function CareFinderPage() {
                       <DataTable rows={analysis.recommended} columns={recommendationColumns} />
                     </div>
                     <div className="space-y-3">
-                      {analysis.recommended.map((facility) => (
+                      {analysis.recommended.map((facility, index) => (
                         <FacilityCard
-                          key={`${facility.name ?? 'facility'}-${facility.distance_km ?? ''}`}
+                          key={`${facility.name ?? 'facility'}-${facility.distance_km ?? ''}-${index}`}
                           facility={facility}
+                          isSelected={selectedFacilityIndex === index}
+                          onShowRoute={() => {
+                            setSelectedFacilityIndex(index);
+                            mapSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                          }}
                         />
                       ))}
                     </div>
@@ -1094,9 +1278,21 @@ function SearchModeOption({
   );
 }
 
-function FacilityCard({ facility }: { facility: FacilityResult }) {
+function FacilityCard({
+  facility,
+  isSelected = false,
+  onShowRoute,
+}: {
+  facility: FacilityResult;
+  isSelected?: boolean;
+  onShowRoute?: () => void;
+}) {
   return (
-    <article className="min-w-0 overflow-hidden rounded-2xl border border-border bg-card p-4 shadow-sm">
+    <article
+      className={`min-w-0 overflow-hidden rounded-2xl border bg-card p-4 shadow-sm ${
+        isSelected ? 'border-primary ring-1 ring-primary/30' : 'border-border'
+      }`}
+    >
       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
         <div className="min-w-0">
           <h4 className="break-words text-base font-semibold">{facility.name ?? 'Facility'}</h4>
@@ -1128,6 +1324,16 @@ function FacilityCard({ facility }: { facility: FacilityResult }) {
             <CalendarCheck className="h-4 w-4" />
             Appointment
           </a>
+          {onShowRoute ? (
+            <button
+              type="button"
+              onClick={onShowRoute}
+              className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-xl border border-input px-3 text-sm font-medium sm:w-auto"
+            >
+              <Navigation className="h-4 w-4" />
+              Directions
+            </button>
+          ) : null}
         </div>
       </div>
       <div className="mt-4 grid gap-3 text-sm sm:grid-cols-2">
@@ -1486,4 +1692,352 @@ function stringFromUnknown(value: unknown, fallback = ''): string {
 
 function isRecord(value: unknown): value is JsonRecord {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function extractMapFacilities(recommended: FacilityResult[]): MapFacility[] {
+  const facilities: MapFacility[] = [];
+  recommended.forEach((facility, index) => {
+    const lat = numberFromUnknown(facility.latitude, Number.NaN);
+    const lon = numberFromUnknown(facility.longitude, Number.NaN);
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+      return;
+    }
+    const straight = numberFromUnknown(facility.distance_km, Number.NaN);
+    facilities.push({
+      index,
+      name: stringFromUnknown(facility.name, `Facility ${index + 1}`),
+      address: stringFromUnknown(facility.address),
+      lat,
+      lon,
+      straightLineKm: Number.isFinite(straight) ? straight : null,
+    });
+  });
+  return facilities;
+}
+
+async function fetchRouteViaMcp(
+  origin: { lat: number; lon: number },
+  destination: { lat: number; lon: number },
+  mode: TravelMode
+): Promise<RouteInfo> {
+  const response = await fetch('/mcp', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: `route-${Date.now()}`,
+      method: 'tools/call',
+      params: {
+        name: 'route_between_destinations',
+        arguments: { origin, destination, mode, units: 'metric', includeRaw: true },
+      },
+    }),
+  });
+  const text = await response.text();
+  const payload: unknown = text ? JSON.parse(text) : {};
+  if (!response.ok) {
+    throw new Error(extractMcpErrorMessage(payload) ?? `Routing request failed (${response.status}).`);
+  }
+  return parseMcpRouteResult(payload);
+}
+
+function extractMcpErrorMessage(payload: unknown): string | null {
+  if (isRecord(payload) && isRecord(payload.error) && typeof payload.error.message === 'string') {
+    return payload.error.message;
+  }
+  return null;
+}
+
+function parseMcpRouteResult(payload: unknown): RouteInfo {
+  const mcpError = extractMcpErrorMessage(payload);
+  if (mcpError) {
+    throw new Error(mcpError);
+  }
+  if (!isRecord(payload) || !isRecord(payload.result)) {
+    throw new Error('The routing service returned an unexpected response.');
+  }
+  const result = payload.result;
+  const content: unknown[] = Array.isArray(result.content) ? result.content : [];
+  const routeText = content
+    .map((entry) => (isRecord(entry) && typeof entry.text === 'string' ? entry.text : ''))
+    .find((entry) => entry.length > 0);
+  if (!routeText) {
+    throw new Error('The routing service did not return any route details.');
+  }
+  if (result.isError === true) {
+    throw new Error(routeText);
+  }
+  let routeData: unknown;
+  try {
+    routeData = JSON.parse(routeText);
+  } catch {
+    throw new Error('Could not read the route response.');
+  }
+  if (!isRecord(routeData)) {
+    throw new Error('The route response was not in the expected format.');
+  }
+  const distanceMeters = numberFromUnknown(routeData.distance, Number.NaN);
+  const timeSeconds = numberFromUnknown(routeData.timeSeconds, Number.NaN);
+  const rawInstructions: unknown[] = Array.isArray(routeData.instructions) ? routeData.instructions : [];
+  const instructions = rawInstructions
+    .map((entry) => stringFromUnknown(entry))
+    .filter((entry) => entry.length > 0);
+  return {
+    distanceKm: Number.isFinite(distanceMeters) ? distanceMeters / 1000 : null,
+    durationMin: Number.isFinite(timeSeconds) ? timeSeconds / 60 : null,
+    instructions,
+    geometry: extractRouteGeometry(routeData.raw),
+  };
+}
+
+function extractRouteGeometry(raw: unknown): RouteGeometry {
+  if (!isRecord(raw)) {
+    return [];
+  }
+  const fromResults = geometryFromResults(raw.results);
+  if (fromResults.length > 0) {
+    return fromResults;
+  }
+  return geometryFromFeatures(raw.features);
+}
+
+function geometryFromResults(results: unknown): RouteGeometry {
+  const list: unknown[] = Array.isArray(results) ? results : [];
+  const first = list[0];
+  if (!isRecord(first) || !Array.isArray(first.geometry)) {
+    return [];
+  }
+  const legs: unknown[] = first.geometry;
+  const points: RouteGeometry = [];
+  for (const leg of legs) {
+    const legPoints: unknown[] = Array.isArray(leg) ? leg : [];
+    for (const point of legPoints) {
+      if (isRecord(point)) {
+        const lat = numberFromUnknown(point.lat, Number.NaN);
+        const lon = numberFromUnknown(point.lon, Number.NaN);
+        if (Number.isFinite(lat) && Number.isFinite(lon)) {
+          points.push([lat, lon]);
+        }
+      }
+    }
+  }
+  return points;
+}
+
+function geometryFromFeatures(features: unknown): RouteGeometry {
+  const list: unknown[] = Array.isArray(features) ? features : [];
+  const first = list[0];
+  if (!isRecord(first) || !isRecord(first.geometry) || !Array.isArray(first.geometry.coordinates)) {
+    return [];
+  }
+  const coordinates: unknown[] = first.geometry.coordinates;
+  const points: RouteGeometry = [];
+  const pushLine = (line: unknown): void => {
+    const pairs: unknown[] = Array.isArray(line) ? line : [];
+    for (const pair of pairs) {
+      if (Array.isArray(pair) && pair.length >= 2) {
+        const lon = numberFromUnknown(pair[0], Number.NaN);
+        const lat = numberFromUnknown(pair[1], Number.NaN);
+        if (Number.isFinite(lat) && Number.isFinite(lon)) {
+          points.push([lat, lon]);
+        }
+      }
+    }
+  };
+  if (Array.isArray(coordinates[0]) && Array.isArray(coordinates[0][0])) {
+    for (const line of coordinates) {
+      pushLine(line);
+    }
+  } else {
+    pushLine(coordinates);
+  }
+  return points;
+}
+
+function formatDuration(minutes: number): string {
+  if (!Number.isFinite(minutes) || minutes < 0) {
+    return '';
+  }
+  const total = Math.max(1, Math.round(minutes));
+  if (total < 60) {
+    return `${total} min`;
+  }
+  const hours = Math.floor(total / 60);
+  const mins = total % 60;
+  return mins > 0 ? `${hours} hr ${mins} min` : `${hours} hr`;
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function readThemeColor(element: HTMLElement | null, variableName: string, fallback: string): string {
+  if (!element) {
+    return fallback;
+  }
+  const value = getComputedStyle(element).getPropertyValue(variableName).trim();
+  return value || fallback;
+}
+
+function createUserIcon(): L.DivIcon {
+  return L.divIcon({
+    className: 'care-map-marker',
+    html: '<span style="display:block;width:18px;height:18px;border-radius:9999px;background:var(--primary);border:3px solid var(--background);box-shadow:0 0 0 4px color-mix(in srgb, var(--primary) 35%, transparent);"></span>',
+    iconSize: [18, 18],
+    iconAnchor: [9, 9],
+  });
+}
+
+function createFacilityIcon(label: number, selected: boolean): L.DivIcon {
+  const size = selected ? 30 : 24;
+  const background = selected ? 'var(--primary)' : '#475569';
+  return L.divIcon({
+    className: 'care-map-marker',
+    html: `<span style="display:flex;align-items:center;justify-content:center;width:${size}px;height:${size}px;border-radius:9999px;background:${background};color:#ffffff;font-size:12px;font-weight:600;border:2px solid var(--background);box-shadow:0 1px 5px rgba(15,23,42,0.45);">${label}</span>`,
+    iconSize: [size, size],
+    iconAnchor: [size / 2, size / 2],
+  });
+}
+
+function RouteMap({
+  user,
+  facilities,
+  selectedIndex,
+  routeGeometry,
+  onSelectFacility,
+}: {
+  user: { lat: number; lon: number; label: string };
+  facilities: MapFacility[];
+  selectedIndex: number;
+  routeGeometry: RouteGeometry;
+  onSelectFacility: (index: number) => void;
+}) {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const mapRef = useRef<L.Map | null>(null);
+  const layerRef = useRef<L.LayerGroup | null>(null);
+  const initialCenterRef = useRef<[number, number]>([user.lat, user.lon]);
+  const selectHandlerRef = useRef(onSelectFacility);
+
+  useEffect(() => {
+    selectHandlerRef.current = onSelectFacility;
+  }, [onSelectFacility]);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container || mapRef.current) {
+      return;
+    }
+    const map = L.map(container, { scrollWheelZoom: false }).setView(initialCenterRef.current, 12);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '&copy; OpenStreetMap contributors',
+      maxZoom: 19,
+    }).addTo(map);
+    layerRef.current = L.layerGroup().addTo(map);
+    mapRef.current = map;
+    const resizeObserver = new ResizeObserver(() => map.invalidateSize());
+    resizeObserver.observe(container);
+    window.setTimeout(() => map.invalidateSize(), 0);
+    return () => {
+      resizeObserver.disconnect();
+      map.remove();
+      mapRef.current = null;
+      layerRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    const layer = layerRef.current;
+    if (!map || !layer) {
+      return;
+    }
+    layer.clearLayers();
+    const routeColor = readThemeColor(containerRef.current, '--primary', '#FF3621');
+    const bounds: Array<[number, number]> = [[user.lat, user.lon]];
+
+    const userMarker = L.marker([user.lat, user.lon], {
+      icon: createUserIcon(),
+      zIndexOffset: 1000,
+      title: user.label || 'Your location',
+    });
+    userMarker.bindPopup(`<strong>Your location</strong><br/>${escapeHtml(user.label || 'Detected location')}`);
+    layer.addLayer(userMarker);
+
+    facilities.forEach((facility) => {
+      const isSelected = facility.index === selectedIndex;
+      const marker = L.marker([facility.lat, facility.lon], {
+        icon: createFacilityIcon(facility.index + 1, isSelected),
+        zIndexOffset: isSelected ? 600 : 0,
+        title: facility.name,
+      });
+      const distanceText =
+        facility.straightLineKm != null ? `${facility.straightLineKm.toFixed(1)} km (straight line)` : '';
+      marker.bindPopup(
+        `<strong>${escapeHtml(facility.name)}</strong>` +
+          (facility.address ? `<br/>${escapeHtml(facility.address)}` : '') +
+          (distanceText ? `<br/>${distanceText}` : '')
+      );
+      marker.on('click', () => {
+        selectHandlerRef.current(facility.index);
+      });
+      layer.addLayer(marker);
+      bounds.push([facility.lat, facility.lon]);
+    });
+
+    const selected = facilities.find((facility) => facility.index === selectedIndex) ?? facilities[0] ?? null;
+
+    if (routeGeometry.length > 1) {
+      const routeLine = L.polyline(routeGeometry, { color: routeColor, weight: 5, opacity: 0.85 });
+      layer.addLayer(routeLine);
+      for (const point of routeGeometry) {
+        bounds.push(point);
+      }
+    } else if (selected) {
+      const directLine = L.polyline(
+        [
+          [user.lat, user.lon],
+          [selected.lat, selected.lon],
+        ],
+        { color: routeColor, weight: 3, opacity: 0.6, dashArray: '6 8' }
+      );
+      layer.addLayer(directLine);
+    }
+
+    if (bounds.length > 1) {
+      map.fitBounds(bounds, { padding: [36, 36], maxZoom: 15 });
+    } else {
+      map.setView([user.lat, user.lon], 13);
+    }
+  }, [user.lat, user.lon, user.label, facilities, selectedIndex, routeGeometry]);
+
+  return (
+    <div ref={containerRef} className="isolate h-72 w-full overflow-hidden rounded-xl border border-border sm:h-96" />
+  );
+}
+
+function TravelModeButton({
+  mode,
+  current,
+  onSelect,
+  icon,
+  label,
+}: {
+  mode: TravelMode;
+  current: TravelMode;
+  onSelect: (mode: TravelMode) => void;
+  icon: ReactNode;
+  label: string;
+}) {
+  const active = mode === current;
+  return (
+    <Button type="button" variant={active ? 'secondary' : 'outline'} aria-pressed={active} onClick={() => onSelect(mode)}>
+      {icon}
+      {label}
+    </Button>
+  );
 }
