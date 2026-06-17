@@ -1,21 +1,32 @@
 import { useState } from 'react';
 import { useTheme } from 'next-themes';
 import { Button } from '@databricks/appkit-ui/react';
-import { Monitor, Moon, Sun } from 'lucide-react';
+import { Database, Leaf, Monitor, Moon, Sun } from 'lucide-react';
 import { CareFinderPage } from './CareFinderPage';
 
 type AppTab = 'genie' | 'care-finder';
 
 const tabs: Array<{ id: AppTab; label: string }> = [
+  { id: 'care-finder', label: 'Care Compass' },
   { id: 'genie', label: 'Survey Says' },
-  { id: 'care-finder', label: 'Care Finder Vision' },
 ];
+
+const themeOrder = ['light', 'dark', 'green', 'databricks', 'system'] as const;
+
+const themeIcons = {
+  light: Sun,
+  dark: Moon,
+  green: Leaf,
+  databricks: Database,
+  system: Monitor,
+} as const;
 
 function ThemeToggle() {
   const { theme, setTheme } = useTheme();
-  const currentTheme = theme ?? 'system';
-  const next = currentTheme === 'light' ? 'dark' : currentTheme === 'dark' ? 'system' : 'light';
-  const Icon = currentTheme === 'light' ? Sun : currentTheme === 'dark' ? Moon : Monitor;
+  const currentTheme = (theme ?? 'system') as (typeof themeOrder)[number];
+  const currentIndex = themeOrder.indexOf(currentTheme);
+  const next = themeOrder[(currentIndex + 1) % themeOrder.length];
+  const Icon = themeIcons[currentTheme] ?? Monitor;
 
   return (
     <Button
@@ -47,7 +58,7 @@ function GenieSpacePage() {
 }
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<AppTab>('genie');
+  const [activeTab, setActiveTab] = useState<AppTab>('care-finder');
 
   return (
     <div className="flex min-h-screen flex-col bg-background">

@@ -636,7 +636,7 @@ export function CareFinderPage() {
       <section className="overflow-hidden rounded-2xl border border-border bg-gradient-to-br from-card via-card to-muted/40 p-4 shadow-sm sm:p-5">
         <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
           <div className="min-w-0">
-            <h2 className="text-2xl font-semibold tracking-tight sm:text-3xl">Care Finder Vision</h2>
+            <h2 className="text-2xl font-semibold tracking-tight sm:text-3xl">Care Compass</h2>
             <p className="mt-2 max-w-3xl text-sm leading-6 text-muted-foreground">
               Upload an image, scan a camera frame, or describe the case context with text or voice to collect
               non-diagnostic care-routing observations and rank nearby facilities.

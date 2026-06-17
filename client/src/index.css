@@ -40,6 +40,80 @@
   --sidebar-ring: oklch(0.705 0.015 286.067); */
 }
 
+/* Light green theme (selected via next-themes class="green").
+   Uses :root.green so it beats the dark prefers-color-scheme media
+   query (:root:not(.light)) on dark-preferring systems. */
+:root.green {
+  --background: oklch(0.98 0.02 150);
+  --foreground: oklch(0.26 0.05 152);
+  --card: oklch(0.99 0.015 150);
+  --card-foreground: oklch(0.26 0.05 152);
+  --popover: oklch(0.99 0.015 150);
+  --popover-foreground: oklch(0.26 0.05 152);
+  --primary: oklch(0.55 0.13 151);
+  --primary-foreground: oklch(0.99 0.02 150);
+  --secondary: oklch(0.93 0.05 150);
+  --secondary-foreground: oklch(0.32 0.06 152);
+  --muted: oklch(0.95 0.035 150);
+  --muted-foreground: oklch(0.52 0.05 152);
+  --accent: oklch(0.9 0.07 150);
+  --accent-foreground: oklch(0.3 0.06 152);
+  --destructive: oklch(0.577 0.245 27.325);
+  --destructive-foreground: oklch(0.985 0 0);
+  --success: oklch(0.6 0.14 160);
+  --success-foreground: oklch(1 0 0);
+  --warning: oklch(0.795 0.157 78.748);
+  --warning-foreground: oklch(0.199 0.027 238.732);
+  --border: oklch(0.88 0.04 150);
+  --input: oklch(0.88 0.04 150);
+  --ring: oklch(0.55 0.13 151);
+  --sidebar: oklch(0.96 0.03 150);
+  --sidebar-foreground: oklch(0.26 0.05 152);
+  --sidebar-primary: oklch(0.55 0.13 151);
+  --sidebar-primary-foreground: oklch(0.99 0.02 150);
+  --sidebar-accent: oklch(0.9 0.07 150);
+  --sidebar-accent-foreground: oklch(0.3 0.06 152);
+  --sidebar-border: oklch(0.88 0.04 150);
+  --sidebar-ring: oklch(0.55 0.13 151);
+}
+
+/* Databricks brand theme (selected via next-themes class="databricks").
+   Built on the Databricks logo palette: Lava red (#FF3621) primary with
+   navy-slate (#1B3139) text on a clean white surface. */
+:root.databricks {
+  --background: oklch(0.99 0.004 40);
+  --foreground: oklch(0.298 0.031 223.2);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.298 0.031 223.2);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.298 0.031 223.2);
+  --primary: oklch(0.65 0.237 30.3);
+  --primary-foreground: oklch(0.99 0 0);
+  --secondary: oklch(0.946 0.027 31.7);
+  --secondary-foreground: oklch(0.35 0.12 30.3);
+  --muted: oklch(0.96 0.003 39.5);
+  --muted-foreground: oklch(0.531 0.03 224.7);
+  --accent: oklch(0.946 0.027 31.7);
+  --accent-foreground: oklch(0.45 0.18 31);
+  --destructive: oklch(0.55 0.22 27);
+  --destructive-foreground: oklch(0.985 0 0);
+  --success: oklch(0.6 0.135 166.892);
+  --success-foreground: oklch(1 0 0);
+  --warning: oklch(0.795 0.157 78.748);
+  --warning-foreground: oklch(0.199 0.027 238.732);
+  --border: oklch(0.902 0.007 39.5);
+  --input: oklch(0.902 0.007 39.5);
+  --ring: oklch(0.65 0.237 30.3);
+  --sidebar: oklch(0.985 0.005 40);
+  --sidebar-foreground: oklch(0.298 0.031 223.2);
+  --sidebar-primary: oklch(0.65 0.237 30.3);
+  --sidebar-primary-foreground: oklch(0.99 0 0);
+  --sidebar-accent: oklch(0.946 0.027 31.7);
+  --sidebar-accent-foreground: oklch(0.45 0.18 31);
+  --sidebar-border: oklch(0.902 0.007 39.5);
+  --sidebar-ring: oklch(0.65 0.237 30.3);
+}
+
 @media (prefers-color-scheme: dark) {
   :root {
     /* --background: oklch(0.141 0.005 285.823);

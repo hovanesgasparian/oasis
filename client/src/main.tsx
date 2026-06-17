@@ -8,7 +8,7 @@ import { ErrorBoundary } from './ErrorBoundary.tsx';
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <ErrorBoundary>
-      <ThemeProvider attribute="class" defaultTheme="system" enableSystem>
+      <ThemeProvider attribute="class" defaultTheme="databricks" enableSystem themes={['light', 'dark', 'green', 'databricks']}>
         <App />
       </ThemeProvider>
     </ErrorBoundary>
